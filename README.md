@@ -59,6 +59,18 @@ python3 tests/html_benchmark/run.py --output untracked/html-to-pdf-benchmark
 
 The runner measures the first conversion, warms up Chromium, probes fixed arrival rates, and repeats the highest passing rate before a final steady run. A run passes with at least 99% valid PDFs, zero dropped iterations, zero OOM kills, and no observed Chromium restart. Use `--p95-ms` to add a latency target and `--fixture` to run a subset. The defaults are 30-second warmups, two-minute probes, three five-minute confirmations, and a 15-minute steady run. The result directory includes Markdown and JSON reports, input fixtures, and individual k6 summaries.
 
+#### Local P1v3-equivalent results
+
+On November 15, 2026, k6 v2.4.0 tested each fixture separately against a local ARM64 container running on Podman with two CPUs, 8 GiB of RAM, swap disabled, and two HTML conversion slots. This run used a 30-second warmup, 12-second probes, three 20-second confirmation runs, and a 90-second final run per fixture.
+
+| Fixture | Offered requests/sec | Valid PDFs/sec | p95 latency | Valid responses |
+| --- | ---: | ---: | ---: | ---: |
+| One-page letter | 40 | 39.69 | 545 ms | 99.22% |
+| Eight-page report | 21 | 21.00 | 213 ms | 100% |
+| Six-page report with 12 embedded images | 2 | 2.00 | 789 ms | 100% |
+
+Each row shows the highest tested whole-number rate that passed the final run. Latency is measured for valid PDF responses, and k6 dropped zero iterations at these rates. The letter returned 28 HTTP 503 responses at 40 requests/sec. The image-heavy report returned 98.15% valid PDFs at 3 requests/sec, below the 99% threshold. At 2 requests/sec, it peaked at 5.46 GiB of container memory. Long-duration memory stability still needs a longer run.
+
 ### Scan compression comparison
 
 To compare both compression endpoints against a baseline, install Pillow alongside pypdf and run the benchmark with both containers listening on separate ports. It generates three synthetic 300 DPI scans and measures output bytes and embedded image dimensions at three quality levels.
