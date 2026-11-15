@@ -19,7 +19,6 @@ internal static class NativeTool
         start.Environment["LC_ALL"] = "C";
         start.Environment["TMPDIR"] = job.DirectoryPath;
         start.Environment["MAGICK_TEMPORARY_PATH"] = job.DirectoryPath;
-        start.Environment.Remove("GS_OPTIONS");
         foreach (var argument in arguments)
         {
             start.ArgumentList.Add(argument);

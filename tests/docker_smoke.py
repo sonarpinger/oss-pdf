@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Exercise a running container using curl, Poppler, and ImageMagick."""
+"""Exercise a running container using curl, pypdf, and ImageMagick."""
 
 import argparse
 import concurrent.futures
 import json
 import math
-import re
 import struct
 import subprocess
 import tempfile
 import time
+import unicodedata
 import zipfile
 import zlib
 from pathlib import Path
+
+from pypdf import PdfReader, PdfWriter
 
 
 def command(*args):
@@ -83,15 +85,15 @@ def write_images(png, jpeg):
 
 
 def pages(path):
-    return [(float(w), float(h)) for w, h in re.findall(
-        r"^Page\s+\d+ size:\s+([\d.]+) x ([\d.]+) pts",
-        command("pdfinfo", "-f", "1", "-l", "20", path),
-        re.M,
-    )]
+    return [(float(page.mediabox.width), float(page.mediabox.height)) for page in PdfReader(path).pages]
 
 
 def text(path):
-    return command("pdftotext", path, "-")
+    return unicodedata.normalize("NFKC", "\n".join(page.extract_text() for page in PdfReader(path).pages))
+
+
+def image_count(path):
+    return sum(len(page.images) for page in PdfReader(path).pages)
 
 
 def main():
@@ -141,10 +143,10 @@ def main():
         compressed = request("Compress", "compressed.pdf", *compress_args)
         assert "VECTOR ONE" in text(compressed) and "VECTOR TWO" in text(compressed)
         # The source contains a path and text, with no images to carry a flattened page.
-        assert len(command("pdfimages", "-list", compressed).strip().splitlines()) == 2
+        assert image_count(compressed) == 0
         raster = request("ImageCompress", "raster.pdf", *compress_args)
         assert not text(raster).strip()
-        assert len(command("pdfimages", "-list", raster).strip().splitlines()) == 4
+        assert image_count(raster) == 2
         assert pages(raster) == [(560.0, 380.0), (240.0, 360.0)], pages(raster)
         merged = request("Merge", "merged.pdf",
                          "-F", f"files=@{word};type=application/pdf", "-F", f"files=@{pdf};type=application/pdf")
@@ -159,6 +161,18 @@ def main():
         request("Compress", "wrong-type.json", "-F", f"file=@{pdf};type=text/plain", "-F", "quality=55", expected=415)
         request("ImageToPdf", "wrong-magic.json", "-F", f"file=@{png};type=image/jpeg", expected=415)
         request("Compress", "quality.json", "-F", f"file=@{pdf};type=application/pdf", "-F", "quality=101", expected=400)
+        encrypted = root / "encrypted.pdf"
+        writer = PdfWriter(clone_from=pdf)
+        writer.encrypt("", "test owner", algorithm="RC4-128")
+        writer.write(encrypted)
+        for route in ("Compress", "ImageCompress"):
+            request(route, f"{route}-encrypted.json", "-F", f"file=@{encrypted};type=application/pdf",
+                    "-F", "quality=55", expected=422)
+        wide = root / "large-page.pdf"
+        writer = PdfWriter()
+        writer.add_blank_page(width=6000, height=6000)
+        writer.write(wide)
+        request("ImageCompress", "pixels.json", "-F", f"file=@{wide};type=application/pdf", "-F", "quality=55", expected=422)
         request("Merge", "too-few.json", "-F", f"files=@{pdf};type=application/pdf", expected=400)
         generic_zip = root / "generic.zip"
         with zipfile.ZipFile(generic_zip, "w") as archive:

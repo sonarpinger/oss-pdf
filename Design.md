@@ -7,7 +7,7 @@
 
 ## Design:
 
-- Use open source tools: Ghostscript + ImageMagick and follow their licensing
+- Use open source tools: qpdf, PDFium, and ImageMagick, and follow their licensing
 - Follow C# minimal API modern conventions
 - Optimized for throughput. This application should be able to serve an organization for PDF api needs
 

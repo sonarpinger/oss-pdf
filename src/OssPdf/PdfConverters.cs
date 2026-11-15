@@ -1,12 +1,12 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
+using System.Text.Json;
 using Microsoft.Extensions.Options;
 using PdfSharp.Drawing;
 using PdfSharp.Pdf;
 
 namespace OssPdf;
 
-public sealed partial class PdfConverters(IOptions<PdfLimits> options)
+public sealed class PdfConverters(IOptions<PdfLimits> options)
 {
     private const int RasterDpi = 150;
     private PdfLimits Limits => options.Value;
@@ -39,44 +39,23 @@ public sealed partial class PdfConverters(IOptions<PdfLimits> options)
 
     public async Task CompressAsync(PdfJob job, string input, int quality, CancellationToken cancellationToken)
     {
-        await InspectPdfAsync(job, input, geometry: false, cancellationToken);
-        var dpi = (96 + (quality - 1) * 204 / 99).ToString(CultureInfo.InvariantCulture);
-        var factor = (1 - (quality - 1) * 0.85 / 99).ToString("0.000", CultureInfo.InvariantCulture);
-        await NativeTool.RunAsync(job, "gs",
-            ["-q", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.7",
-                "-dAutoRotatePages=/None", "-dDetectDuplicateImages=true",
-                "-dDownsampleColorImages=true", "-dColorImageResolution=" + dpi,
-                "-dDownsampleGrayImages=true", "-dGrayImageResolution=" + dpi,
-                "-dAutoFilterColorImages=false", "-dColorImageFilter=/DCTEncode",
-                "-dAutoFilterGrayImages=false", "-dGrayImageFilter=/DCTEncode",
-                "-sOutputFile=" + job.OutputPath, "-c",
-                $"<< /ColorImageDict << /QFactor {factor} /Blend 1 >> /GrayImageDict << /QFactor {factor} /Blend 1 >> >> setdistillerparams",
-                "-f", input], cancellationToken);
+        await InspectPdfAsync(job, input, cancellationToken);
+        await NativeTool.RunAsync(job, "qpdf",
+            ["--object-streams=generate", "--recompress-flate", "--compression-level=9", "--optimize-images",
+                "--jpeg-quality=" + quality.ToString(CultureInfo.InvariantCulture), input, job.OutputPath], cancellationToken);
     }
 
     public async Task RasterizeAsync(PdfJob job, string input, int quality, CancellationToken cancellationToken)
     {
-        var (_, pages) = await InspectPdfAsync(job, input, geometry: true, cancellationToken);
-        double totalPixels = 0;
-        foreach (var page in pages)
-        {
-            var pixels = Math.Ceiling(page.Width * RasterDpi / 72) * Math.Ceiling(page.Height * RasterDpi / 72);
-            totalPixels += pixels;
-            if (page.Width <= 0 || page.Height <= 0 || pixels > Limits.MaxImagePixels || totalPixels > Limits.MaxRasterPixels)
-            {
-                throw new PdfRequestException(422, "The PDF exceeds the raster pixel limit.");
-            }
-        }
-
-        await NativeTool.RunAsync(job, "gs",
-            ["-q", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-dUseCropBox", "-dNumRenderingThreads=2",
-                "-sDEVICE=png16m", $"-r{RasterDpi}", "-dTextAlphaBits=4", "-dGraphicsAlphaBits=4",
-                "-sOutputFile=" + job.PathFor("page-%06d.png"), input], cancellationToken);
-
+        var dimensions = await NativeTool.RunAsync(job, "pdfium-render",
+            [input, RasterDpi.ToString(CultureInfo.InvariantCulture), Limits.MaxPages.ToString(CultureInfo.InvariantCulture),
+                Limits.MaxImagePixels.ToString(CultureInfo.InvariantCulture),
+                Limits.MaxRasterPixels.ToString(CultureInfo.InvariantCulture)], cancellationToken);
+        var pages = dimensions.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         var rendered = Directory.GetFiles(job.DirectoryPath, "page-*.png").Order(StringComparer.Ordinal).ToArray();
-        if (rendered.Length != pages.Length)
+        if (rendered.Length == 0 || rendered.Length != pages.Length)
         {
-            throw new PdfRequestException(422, "Ghostscript could not render every page.");
+            throw new PdfRequestException(422, "PDFium could not render every page.");
         }
 
         using var document = new PdfDocument();
@@ -89,7 +68,7 @@ public sealed partial class PdfConverters(IOptions<PdfLimits> options)
                 ["PNG:" + png, "-strip", "-quality", quality.ToString(CultureInfo.InvariantCulture), "JPEG:" + jpeg],
                 cancellationToken);
             File.Delete(png);
-            var pageSize = pages[index];
+            var pageSize = ReadPageSize(pages[index]);
             var page = document.AddPage();
             page.Width = XUnit.FromPoint(pageSize.Width);
             page.Height = XUnit.FromPoint(pageSize.Height);
@@ -106,7 +85,7 @@ public sealed partial class PdfConverters(IOptions<PdfLimits> options)
         var remainingPages = Limits.MaxPages;
         foreach (var input in inputs)
         {
-            var (count, _) = await InspectPdfAsync(job, input, geometry: false, cancellationToken);
+            var count = await InspectPdfAsync(job, input, cancellationToken);
             remainingPages -= count;
             if (remainingPages < 0)
             {
@@ -136,23 +115,15 @@ public sealed partial class PdfConverters(IOptions<PdfLimits> options)
                 "PDF:" + job.OutputPath], cancellationToken);
     }
 
-    public async Task CheckGeneratedPdfAsync(PdfJob job, CancellationToken cancellationToken)
-    {
-        await InspectPdfAsync(job, job.OutputPath, geometry: false, cancellationToken);
-    }
+    public Task CheckGeneratedPdfAsync(PdfJob job, CancellationToken cancellationToken) =>
+        InspectPdfAsync(job, job.OutputPath, cancellationToken);
 
-    private async Task<(int Count, PageSize[] Sizes)> InspectPdfAsync(
-        PdfJob job, string path, bool geometry, CancellationToken cancellationToken)
+    private async Task<int> InspectPdfAsync(PdfJob job, string path, CancellationToken cancellationToken)
     {
-        string[] arguments = geometry
-            ? ["-f", "1", "-l", Limits.MaxPages.ToString(CultureInfo.InvariantCulture), path]
-            : [path];
-        var info = await NativeTool.RunAsync(job, "pdfinfo", arguments, cancellationToken);
-        var countField = PageCount().Matches(info).LastOrDefault();
-        if (countField is null || !int.TryParse(countField.Groups[1].ValueSpan, CultureInfo.InvariantCulture, out var count) ||
-            count <= 0 || Encrypted().Match(info, countField.Index).Success)
+        var countText = await NativeTool.RunAsync(job, "qpdf", ["--show-npages", path], cancellationToken);
+        if (!int.TryParse(countText, CultureInfo.InvariantCulture, out var count) || count <= 0)
         {
-            throw new PdfRequestException(422, "The PDF is invalid or password-protected.");
+            throw new PdfRequestException(422, "The PDF has an invalid page count.");
         }
 
         if (count > Limits.MaxPages)
@@ -160,43 +131,30 @@ public sealed partial class PdfConverters(IOptions<PdfLimits> options)
             throw TooManyPages();
         }
 
-        if (!geometry)
+        var security = await NativeTool.RunAsync(job, "qpdf", ["--json=2", "--json-key=encrypt", path], cancellationToken);
+        using var metadata = JsonDocument.Parse(security);
+        if (metadata.RootElement.GetProperty("encrypt").GetProperty("encrypted").GetBoolean())
         {
-            return (count, []);
+            throw new PdfRequestException(422, "The PDF is encrypted.");
         }
 
-        var sizes = PageDimensions().Matches(info, countField.Index);
-        var rotations = PageRotation().Matches(info, countField.Index);
-        if (sizes.Count != count || rotations.Count != count)
+        return count;
+    }
+
+    private static PageSize ReadPageSize(string dimensions)
+    {
+        var sides = dimensions.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (sides.Length != 2 || !double.TryParse(sides[0], CultureInfo.InvariantCulture, out var width) ||
+            !double.TryParse(sides[1], CultureInfo.InvariantCulture, out var height) ||
+            !double.IsFinite(width) || !double.IsFinite(height) || width <= 0 || height <= 0)
         {
             throw new PdfRequestException(422, "Could not determine the PDF page dimensions.");
         }
 
-        var pages = new PageSize[count];
-        for (var index = 0; index < count; index++)
-        {
-            var width = double.Parse(sizes[index].Groups[1].ValueSpan, CultureInfo.InvariantCulture);
-            var height = double.Parse(sizes[index].Groups[2].ValueSpan, CultureInfo.InvariantCulture);
-            var rotation = int.Parse(rotations[index].Groups[1].ValueSpan, CultureInfo.InvariantCulture);
-            pages[index] = rotation % 180 == 0 ? new(width, height) : new(height, width);
-        }
-
-        return (count, pages);
+        return new(width, height);
     }
 
     private sealed record PageSize(double Width, double Height);
 
     private static PdfRequestException TooManyPages() => new(422, "The PDF page limit was exceeded.");
-
-    [GeneratedRegex(@"^Pages:[ \t]+([0-9]+)", RegexOptions.Multiline)]
-    private static partial Regex PageCount();
-
-    [GeneratedRegex(@"^Encrypted:[ \t]+yes\b", RegexOptions.Multiline)]
-    private static partial Regex Encrypted();
-
-    [GeneratedRegex(@"^Page[ \t]+[0-9]+ size:[ \t]+([0-9.]+) x ([0-9.]+) pts", RegexOptions.Multiline)]
-    private static partial Regex PageDimensions();
-
-    [GeneratedRegex(@"^Page[ \t]+[0-9]+ rot:[ \t]+(-?[0-9]+)", RegexOptions.Multiline)]
-    private static partial Regex PageRotation();
 }
