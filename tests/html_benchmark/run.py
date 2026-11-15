@@ -57,15 +57,27 @@ def read_counters(path):
 
 
 def sample_resources(path):
-    pids = set()
+    browsers, workers = set(), set()
     for pid in (path / "cgroup.procs").read_text().split():
         try:
             argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
         except (FileNotFoundError, PermissionError, ProcessLookupError):
             continue
         if argv[0].endswith(b"/chrome-headless-shell") and not any(arg.startswith(b"--type=") for arg in argv):
-            pids.add(int(pid))
-    return int((path / "memory.current").read_text()), pids
+            browsers.add(int(pid))
+        if b"--ironpress-worker" in argv:
+            workers.add(int(pid))
+    return int((path / "memory.current").read_text()), browsers, workers
+
+
+def image_draws(page):
+    resources = page["/Resources"].get("/XObject")
+    contents = page.get_contents()
+    if resources is None or contents is None:
+        return 0
+    objects = resources.get_object()
+    return sum(operator == b"Do" and objects[operands[0]].get("/Subtype") == "/Image"
+               for operands, operator in contents.operations)
 
 
 def validate_fixture(url, payload, fixture):
@@ -83,11 +95,19 @@ def validate_fixture(url, payload, fixture):
         raise RuntimeError(f"{fixture} did not return a PDF")
     _, expected_pages, marker, expected_images = FIXTURES[fixture]
     pages = PdfReader(io.BytesIO(content)).pages
-    extracted = unicodedata.normalize("NFKC", "\n".join(page.extract_text() for page in pages))
-    images = sum(len(page.images) for page in pages)
-    if len(pages) != expected_pages or marker not in extracted or images < expected_images:
-        raise RuntimeError(f"{fixture}: {len(pages)} pages, {images} images, marker found={marker in extracted}")
-    return round(elapsed, 1), len(content), len(pages), images
+    page_text = [unicodedata.normalize("NFKC", page.extract_text()) for page in pages]
+    extracted = "\n".join(page_text)
+    images_per_page = [image_draws(page) for page in pages]
+    if (len(pages) != expected_pages or marker not in extracted
+            or images_per_page != [expected_images // expected_pages] * expected_pages):
+        raise RuntimeError(
+            f"{fixture}: {len(pages)} pages, image draws by page: {images_per_page}, marker found={marker in extracted}"
+        )
+    if fixture in ("two-page-letter", "report"):
+        for number, text in enumerate(page_text, 1):
+            if f"Page {number} of {expected_pages}" not in " ".join(text.split()):
+                raise RuntimeError(f"{fixture}: missing page counter {number} of {expected_pages}")
+    return round(elapsed, 1), len(content), len(pages), sum(images_per_page)
 
 
 def await_http(url, engine, container):
@@ -113,7 +133,7 @@ def run_stage(args, fixture, url, directory, container, cgroup, name, rate, dura
     started = datetime.now(timezone.utc).isoformat()
     before_cpu = read_counters(cgroup / "cpu.stat")
     before_memory = read_counters(cgroup / "memory.events")
-    start_usage, browsers = sample_resources(cgroup)
+    start_usage, browsers, workers = sample_resources(cgroup)
     samples = [start_usage]
     with (directory / f"{name}.log").open("w") as log:
         start_time = time.monotonic()
@@ -128,15 +148,17 @@ def run_stage(args, fixture, url, directory, container, cgroup, name, rate, dura
                     result = process.wait(timeout=1)
                     break
                 except subprocess.TimeoutExpired:
-                    usage, pids = sample_resources(cgroup)
+                    usage, browser_pids, worker_pids = sample_resources(cgroup)
                     samples.append(usage)
-                    browsers.update(pids)
+                    browsers.update(browser_pids)
+                    workers.update(worker_pids)
         elapsed = time.monotonic() - start_time
     if result != 0:
         raise RuntimeError(f"k6 exited with status {result}; see {directory / (name + '.log')}")
 
-    end_usage, pids = sample_resources(cgroup)
-    browsers.update(pids)
+    end_usage, browser_pids, worker_pids = sample_resources(cgroup)
+    browsers.update(browser_pids)
+    workers.update(worker_pids)
     after_cpu = read_counters(cgroup / "cpu.stat")
     after_memory = read_counters(cgroup / "memory.events")
     metrics = json.loads(summary_path.read_text())["metrics"]
@@ -150,7 +172,11 @@ def run_stage(args, fixture, url, directory, container, cgroup, name, rate, dura
     if args.p95_ms is not None:
         successful &= 0 < latency.get("p(95)", 0) <= args.p95_ms
     oom_kills = after_memory.get("oom_kill", 0) - before_memory.get("oom_kill", 0)
-    successful &= oom_kills == 0 and len(browsers) <= 1
+    renderer_stable = (
+        len(browsers) == 1 and not workers if args.renderer == "playwright"
+        else 1 <= len(workers) <= 2 and not browsers
+    )
+    successful &= oom_kills == 0 and renderer_stable
     container_log = subprocess.run(
         [args.engine, "logs", "--since", started, container], capture_output=True, text=True, check=True,
     )
@@ -172,7 +198,7 @@ def run_stage(args, fixture, url, directory, container, cgroup, name, rate, dura
         "memory_start_mib": round(start_usage / 2**20, 1),
         "peak_memory_mib": round(max(*samples, end_usage) / 2**20, 1),
         "memory_end_mib": round(end_usage / 2**20, 1),
-        "oom_kills": oom_kills, "chromium_browser_pids": sorted(browsers),
+        "oom_kills": oom_kills, "chromium_browser_pids": sorted(browsers), "ironpress_worker_pids": sorted(workers),
         **counts,
     }
     print(
@@ -192,16 +218,17 @@ def benchmark_fixture(args, name, destination, publish):
     container = f"oss-pdf-html-{uuid.uuid4().hex[:8]}"
     url = f"http://127.0.0.1:{args.port}"
     run_args = [
-        args.engine, "run", "--rm", "-d", "--name", container, "--init", "--shm-size=256m",
+        args.engine, "run", "-d", "--name", container, "--init", "--shm-size=256m",
         "--cpus=2", "--memory=8g", "--memory-swap=8g", "-p", f"127.0.0.1:{args.port}:8080",
         "-e", "Pdf__HtmlConcurrency=2", "-e", "Pdf__QueueWaitMilliseconds=500",
-        "-e", "Pdf__ChromiumSandbox=true",
+        "-e", f"Pdf__HtmlRenderer={args.renderer}", "-e", "Pdf__ChromiumSandbox=true",
     ]
     if args.app_cores:
         run_args += ["--entrypoint", "/usr/bin/taskset", args.image, "-c", args.app_cores, "dotnet", "OssPdf.dll"]
     else:
         run_args.append(args.image)
     command(*run_args)
+    cgroup = None
     try:
         pid = command(args.engine, "inspect", "--format", "{{.State.Pid}}", container)
         cgroup = cgroup_path(pid)
@@ -225,23 +252,26 @@ def benchmark_fixture(args, name, destination, publish):
             return stage
 
         measure("warmup", 1, args.warmup_seconds)
-        low, high = 0, args.max_rps + 1
-        rate = 1
-        while rate <= args.max_rps:
-            if measure(f"probe-{rate}", rate, args.probe_seconds)["passed"]:
+        probes = {rate: measure(f"probe-{rate}", rate, args.probe_seconds) for rate in sorted(set(args.probe_rps))}
+
+        def probe(rate):
+            if rate not in probes:
+                probes[rate] = measure(f"probe-{rate}", rate, args.probe_seconds)
+            return probes[rate]["passed"]
+
+        low = max((rate for rate, stage in probes.items() if stage["passed"]), default=0)
+        high = min((rate for rate in probes if rate > low), default=args.max_rps + 1)
+        rate = min(max(1, low * 2), args.max_rps)
+        while rate < high and rate > low:
+            if probe(rate):
                 low = rate
+                rate = min(rate * 2, args.max_rps)
             else:
                 high = rate
                 break
-            rate *= 2
-        if low < args.max_rps < rate and high > args.max_rps:
-            if measure(f"probe-{args.max_rps}", args.max_rps, args.probe_seconds)["passed"]:
-                low = args.max_rps
-            else:
-                high = args.max_rps
         while high - low > 1:
             rate = (low + high) // 2
-            if measure(f"probe-{rate}", rate, args.probe_seconds)["passed"]:
+            if probe(rate):
                 low = rate
             else:
                 high = rate
@@ -267,14 +297,22 @@ def benchmark_fixture(args, name, destination, publish):
         publish(name, data)
         if "sustainable" not in data:
             raise RuntimeError(f"No offered rate met the benchmark criteria for {name}.")
+    except FileNotFoundError as error:
+        if cgroup is None or not cgroup.exists():
+            state = command(args.engine, "inspect", "--format", "{{json .State}}", container)
+            (directory / "container-state.json").write_text(state + "\n", encoding="utf-8")
+            raise RuntimeError(f"Container stopped before {name} finished. See {directory / 'container-state.json'}.") from error
+        raise
     finally:
-        subprocess.run([args.engine, "stop", "--time", "5", container], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run([args.engine, "stop", "--time", "5", container], capture_output=True)
+        subprocess.run([args.engine, "rm", "--force", container], check=True, stdout=subprocess.DEVNULL)
 
 
 def save_results(results, destination):
     (destination / "results.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
     lines = [
         "# HTML-to-PDF throughput", "",
+        f"- Renderer: {results['configuration']['renderer']}",
         f"- Image ID: `{results['image_id']}`",
         f"- Host: {results['host']}",
         f"- k6: {results['k6']}",
@@ -284,14 +322,14 @@ def save_results(results, destination):
         f"{results['configuration']['probe_seconds']} s probes, "
         f"{results['configuration']['repeats']} × {results['configuration']['repeat_seconds']} s confirmations, "
         f"{results['configuration']['soak_seconds']} s final steady run per fixture.",
-        "- Pass criteria: ≥99% valid PDFs, zero dropped iterations, zero OOM kills and no observed browser restart.",
+        "- Pass criteria: ≥99% valid PDFs, zero dropped iterations, zero OOM kills and no observed renderer restart.",
         "- Successful PDF rate is valid responses for requests scheduled in the run divided by scheduled seconds.",
         "",
         "| Fixture | Pages | Offered req/s | Valid PDFs/s | Valid % | p95 (ms) | Cold (ms) | Peak memory (MiB) |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     if results["configuration"]["p95_ms"] is not None:
-        lines.insert(9, f"- Additional passing p95 limit: {results['configuration']['p95_ms']} ms.")
+        lines.insert(10, f"- Additional passing p95 limit: {results['configuration']['p95_ms']} ms.")
     for fixture, data in results["fixtures"].items():
         if "sustainable" not in data:
             continue
@@ -305,7 +343,8 @@ def save_results(results, destination):
         lines += [
             "", f"## {fixture}", "",
             f"Request: {data['request_bytes']:,} bytes. Sample PDF: {data['sample_pdf_bytes']:,} bytes, "
-            f"{data['pages']} pages and {data['images']} image objects.",
+            f"{data['pages']} pages and {data['images']} drawn images.",
+            f"Search ceiling: {data.get('probe_ceiling', results['configuration']['max_rps'])} req/s.",
             "", "| Stage | " + " | ".join(RUN_COLUMNS.values()) + " |",
             "| --- | " + " | ".join("---:" for _ in RUN_COLUMNS) + " |",
         ]
@@ -321,6 +360,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", default="oss-pdf:html-benchmark")
     parser.add_argument("--engine", default="docker")
+    parser.add_argument("--renderer", choices=("ironpress", "playwright"), default="ironpress")
     parser.add_argument("--k6", default="k6")
     parser.add_argument("--port", type=int, default=18080)
     parser.add_argument("--output", type=Path, default=Path("untracked/html-to-pdf-benchmark"))
@@ -332,11 +372,15 @@ def main():
     parser.add_argument("--soak-seconds", type=int, default=900)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--max-rps", type=int, default=64)
+    parser.add_argument("--probe-rps", action="append", type=int, default=[],
+                        help="include an explicit probe before searching for the sustained rate (repeatable)")
     parser.add_argument("--p95-ms", type=float, help="optional latency target for passing a rate")
     args = parser.parse_args()
     durations = (args.warmup_seconds, args.probe_seconds, args.repeat_seconds, args.soak_seconds)
     if min(*durations, args.repeats, args.max_rps) < 1 or args.p95_ms is not None and args.p95_ms <= 0:
         parser.error("durations, repetitions, rate limit, and p95 target must be positive")
+    if any(rate < 1 or rate > args.max_rps for rate in args.probe_rps):
+        parser.error("explicit probe rates must be between 1 and --max-rps")
     destination = args.output.resolve()
     destination.mkdir(parents=True, exist_ok=False)
     results = {

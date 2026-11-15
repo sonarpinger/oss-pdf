@@ -2,6 +2,18 @@
   "version": 1,
   "dependencies": {
     "net10.0": {
+      "HtmlAgilityPack": {
+        "type": "Direct",
+        "requested": "[1.13.1, )",
+        "resolved": "1.13.1",
+        "contentHash": "wkKKu0oltLJQRBf862+O0yqBAvo+RVisLXFFTlThWCuw1gjATkna1ZKQBcwHUyJUUZhkPUvyxFJcyqXSAvNkag=="
+      },
+      "Ironpress": {
+        "type": "Direct",
+        "requested": "[1.7.0, )",
+        "resolved": "1.7.0",
+        "contentHash": "YSZRrmdxHumD2SSt5ZmFZmdHnkMaf8sPAi93Wmwsy/G/MGa+nQ6ZCVgGQ3gvd6QT/tL/QrYHFk9/XRcGRzCHIw=="
+      },
       "Microsoft.Playwright": {
         "type": "Direct",
         "requested": "[1.64.1, )",

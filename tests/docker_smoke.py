@@ -138,6 +138,19 @@ def main():
         assert all(label in html_text for label in ("Generated HTML fixture", "Header fixture", "Footer fixture"))
         assert "JS-EXECUTED" not in html_text
         assert "custom.pdf" in (root / "html.pdf.headers").read_text()
+        numbered_payload = json.dumps({
+            "body": '<p>First sheet</p><p style="break-before:page">Second sheet</p>',
+            "header": '<div style="font:10px sans-serif">Sheet <strong class="another pageNumber">x</strong></div>',
+            "footer": '<div style="font:10px sans-serif">Page <span class="pageNumber"></span>'
+                      ' of <span class="totalPages"></span></div>',
+        })
+        numbered = request("HtmlToPdf", "numbered.pdf", "-H", "Content-Type: application/json",
+                           "--data-binary", numbered_payload)
+        assert pages(numbered) == [(612.0, 792.0)] * 2
+        for number, page in enumerate(PdfReader(numbered).pages, 1):
+            page_text = " ".join(page.extract_text().split())
+            assert f"Sheet {number}" in page_text and f"Page {number} of 2" in page_text, page_text
+            assert f"{['First', 'Second'][number - 1]} sheet" in page_text, page_text
         word = request("WordToPdf", "word.pdf", *word_args)
         assert "Generated Word fixture" in text(word)
         compressed = request("Compress", "compressed.pdf", *compress_args)

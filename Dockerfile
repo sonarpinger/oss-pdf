@@ -66,6 +66,7 @@ RUN TMPDIR=/tmp dotnet OssPdf.dll --install-chromium && \
     ! dpkg-query -W -f='${db:Status-Abbrev} ${binary:Package}\n' | grep -Eq '^ii +([^ ]*poppler|ghostscript|libgs[0-9])'
 COPY --from=pdf-tools /out/ /
 COPY LICENSE /app/LICENSE
+COPY docker/licenses/ /usr/local/share/doc/oss-pdf/
 USER app
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "OssPdf.dll"]

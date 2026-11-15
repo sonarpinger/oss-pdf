@@ -1,4 +1,4 @@
-"""Create three deterministic HTML request payloads for the benchmark."""
+"""Create deterministic HTML request payloads for the benchmark."""
 
 import base64
 import io
@@ -21,6 +21,26 @@ def letter():
               <p>Reference: OPS-2701</p><p>Regards,<br>Operations Support</p>
             </main>""",
         "fileName": "letter.pdf",
+    }
+
+
+def two_page_letter():
+    first_page = letter()["body"]
+    return {
+        "body": first_page + """
+            <main style="break-before:page;font:12pt 'Liberation Sans',sans-serif;line-height:1.45">
+              <h1 style="font-size:23pt">Processing details</h1>
+              <p>Reference: OPS-2701</p>
+              <p>This page accompanies the service confirmation. The operations team
+              received the quarterly report and recorded its completion.</p>
+              <p>Retain both pages together in your operations records.</p>
+              <p>Operations Support</p>
+            </main>""",
+        "footer": (
+            '<div style="margin-left:40px;font:10px sans-serif">Page '
+            '<span class="pageNumber"></span> of <span class="totalPages"></span></div>'
+        ),
+        "fileName": "two-page-letter.pdf",
     }
 
 
@@ -97,6 +117,7 @@ def image_report():
 
 FIXTURES = {
     "letter": (letter, 1, "Service confirmation", 0),
+    "two-page-letter": (two_page_letter, 2, "Processing details", 0),
     "report": (report, 8, "Operations report 8", 0),
     "image-report": (image_report, 6, "Inspection record 6", 12),
 }

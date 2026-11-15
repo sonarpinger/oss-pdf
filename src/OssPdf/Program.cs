@@ -7,6 +7,12 @@ if (args is ["--install-chromium"])
     return Microsoft.Playwright.Program.Main(["install", "--with-deps", "--only-shell", "chromium"]);
 }
 
+if (args is ["--ironpress-worker"])
+{
+    IronpressWorker.Run();
+    return 0;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = PdfLimits.RequestBytes);
 builder.Services.AddProblemDetails();
@@ -16,6 +22,7 @@ builder.Services.AddOptions<PdfLimits>()
     .ValidateOnStart();
 builder.Services.AddSingleton<PdfJobs>();
 builder.Services.AddSingleton<PdfConverters>();
+builder.Services.AddSingleton<IronpressWorker>();
 builder.Services.AddSingleton<HtmlRenderer>();
 builder.Host.UseWolverine(options => options.Durability.Mode = DurabilityMode.Solo);
 builder.Services.AddWolverineHttp();

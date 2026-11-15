@@ -7,6 +7,7 @@ public sealed class PdfLimits
     public int QueueWaitMilliseconds { get; init; } = 500;
     public int TimeoutSeconds { get; init; } = 120;
     public int HtmlConcurrency { get; init; } = 2;
+    public HtmlRenderEngine HtmlRenderer { get; init; } = HtmlRenderEngine.Ironpress;
     public int WordConcurrency { get; init; } = 2;
     public int PdfConcurrency { get; init; } = 2;
     public int RasterConcurrency { get; init; } = 1;
@@ -20,7 +21,8 @@ public sealed class PdfLimits
 
     public bool IsValid() =>
         !string.IsNullOrWhiteSpace(ScratchRoot) && QueueWaitMilliseconds >= 0 && TimeoutSeconds > 0 &&
-        HtmlConcurrency > 0 && WordConcurrency > 0 && PdfConcurrency > 0 && RasterConcurrency > 0 &&
+        HtmlConcurrency > 0 && Enum.IsDefined(HtmlRenderer) &&
+        WordConcurrency > 0 && PdfConcurrency > 0 && RasterConcurrency > 0 &&
         MaxPages > 0 && MaxMergeFiles >= 2 && MaxImagePixels > 0 && MaxRasterPixels >= MaxImagePixels &&
         MaxOutputBytes > 0 && MaxScratchBytes > MaxOutputBytes;
 }

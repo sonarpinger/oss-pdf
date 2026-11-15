@@ -14,7 +14,11 @@ public sealed record HtmlToPdfRequest(
     double? MarginRight,
     double? MarginLeft);
 
-public sealed class HtmlRenderer(IOptions<PdfLimits> options) : IAsyncDisposable
+public enum HtmlRenderEngine { Ironpress, Playwright }
+
+internal sealed record HtmlPageMargins(double Top, double Right, double Bottom, double Left);
+
+public sealed class HtmlRenderer(IOptions<PdfLimits> options, IronpressWorker ironpress) : IAsyncDisposable
 {
     private readonly SemaphoreSlim _startup = new(1);
     private IPlaywright? _playwright;
@@ -27,6 +31,18 @@ public sealed class HtmlRenderer(IOptions<PdfLimits> options) : IAsyncDisposable
             throw new PdfRequestException(400, "An HTML body is required.");
         }
 
+        var margins = new HtmlPageMargins(
+            Millimeters(request.MarginTop, request.Header is null ? 12 : 20),
+            Millimeters(request.MarginRight, 12),
+            Millimeters(request.MarginBottom, request.Footer is null ? 12 : 20),
+            Millimeters(request.MarginLeft, 12));
+
+        if (options.Value.HtmlRenderer == HtmlRenderEngine.Ironpress)
+        {
+            await ironpress.RenderAsync(request, margins, job, options.Value.MaxPages, cancellationToken);
+            return;
+        }
+
         var print = new PagePdfOptions
         {
             Format = "Letter",
@@ -37,10 +53,10 @@ public sealed class HtmlRenderer(IOptions<PdfLimits> options) : IAsyncDisposable
             PrintBackground = true,
             Margin = new Margin
             {
-                Top = Millimeters(request.MarginTop, request.Header is null ? 12 : 20),
-                Bottom = Millimeters(request.MarginBottom, request.Footer is null ? 12 : 20),
-                Left = Millimeters(request.MarginLeft, 12),
-                Right = Millimeters(request.MarginRight, 12)
+                Top = CssMillimeters(margins.Top),
+                Bottom = CssMillimeters(margins.Bottom),
+                Left = CssMillimeters(margins.Left),
+                Right = CssMillimeters(margins.Right)
             }
         };
 
@@ -103,7 +119,7 @@ public sealed class HtmlRenderer(IOptions<PdfLimits> options) : IAsyncDisposable
         }
     }
 
-    private static string Millimeters(double? value, double fallback)
+    private static double Millimeters(double? value, double fallback)
     {
         var millimeters = value ?? fallback;
         if (!double.IsFinite(millimeters) || millimeters is < 0 or > 100)
@@ -111,8 +127,11 @@ public sealed class HtmlRenderer(IOptions<PdfLimits> options) : IAsyncDisposable
             throw new PdfRequestException(400, "Margins must be between 0 and 100 millimeters.");
         }
 
-        return millimeters.ToString("0.###", CultureInfo.InvariantCulture) + "mm";
+        return millimeters;
     }
+
+    private static string CssMillimeters(double value) =>
+        value.ToString("0.###", CultureInfo.InvariantCulture) + "mm";
 
     public async ValueTask DisposeAsync()
     {
