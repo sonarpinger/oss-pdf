@@ -1,6 +1,6 @@
 # oss-pdf
 
-A self-hosted .NET 10 PDF API with ASP.NET Core Minimal API endpoints. Designed to run most business required flows while using software with permissible licensing. The ideal case being a central PDF API deployed internally at an organization.
+A self-hosted .NET 10 PDF API with ASP.NET Core Minimal API endpoints. Designed to run most business required flows while using software with permissible licensing. The ideal case being a central PDF API deployed internally at an organization. Optimized for throughput.
 
 ## Run
 
@@ -8,10 +8,6 @@ A self-hosted .NET 10 PDF API with ASP.NET Core Minimal API endpoints. Designed 
 docker build -t oss-pdf .
 docker run --rm --init -p 127.0.0.1:8080:8080 oss-pdf
 ```
-
-`/HtmlToPdf` uses Ironpress.
-
-The service is intended for an internal network or an authenticated gateway. Keep the gateway's request size limit aligned with the application's 60 MB limit (60,000,000 bytes for the entire request body). Keep worker scratch storage local and ephemeral. Requests can run for up to 120 seconds by default, including upload time once admitted.
 
 ## API
 
@@ -100,9 +96,7 @@ Run the container smoke suite from a host with Python 3, pypdf, curl, and ImageM
 python3 tests/docker_smoke.py http://127.0.0.1:8080 --load
 ```
 
-Use `--cpus=2 --memory=8g --memory-swap=8g` on the container for a local test with the CPU and RAM budget of a single Azure App Service P1v3 instance.
-
-### HTML-to-PDF benchmark
+#### HtmlToPdf benchmark on a local container
 
 Run the Ironpress benchmark from a Linux host with cgroup v2, k6, pypdf, and Pillow.
 
@@ -111,20 +105,13 @@ docker build -t oss-pdf:html-benchmark .
 python3 tests/html_benchmark/run.py --fixture two-page-letter --fixture image-report
 ```
 
-After removing the browser, the two-page letter and the six-page report with 12 images matched the previous Ironpress build pixel for pixel at 144 DPI. The letter retained both page numbers.
+These results where recorded on a local container modeled off of a P1v3 web application container (`--cpus=2 --memory=8g`) 
 
-#### Historical renderer comparison on a local P1v3-equivalent container
-
-These results were recorded before the Playwright option was removed.
-
-| Fixture | Renderer | Offered req/s | Valid PDFs/s | p95 | Valid responses |
+| Fixture | Offered req/s | Valid PDFs/s | p95 | Valid responses |
 | --- | --- | ---: | ---: | ---: | ---: |
-| One-page letter | Ironpress | 220 | 218.03 | 509 ms | 99.11% |
-| One-page letter | Playwright | 41 | 40.72 | 543 ms | 99.31% |
-| Two-page letter with page numbers | Ironpress | 84 | 83.62 | 520 ms | 99.54% |
-| Two-page letter with page numbers | Playwright | 27 | 27.00 | 350 ms | 100% |
-| Six-page report with 12 embedded images | Ironpress | 11 | 10.93 | 632 ms | 99.39% |
-| Six-page report with 12 embedded images | Playwright | 2 | 2.00 | 482 ms | 100% |
+| One-page letter | 220 | 218.03 | 509 ms | 99.11% |
+| Two-page letter with page numbers | 84 | 83.62 | 520 ms | 99.54% |
+| Six-page report with 12 embedded images | 11 | 10.93 | 632 ms | 99.39% |
 
 ### Small image PDF profile
 
