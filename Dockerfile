@@ -24,7 +24,6 @@ RUN curl -fsSL --retry 3 https://github.com/qpdf/qpdf/releases/download/v12.4.2/
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS runtime-deps
 ENV ASPNETCORE_HTTP_PORTS=8080 \
-    PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
     Pdf__ScratchRoot=/scratch
 COPY docker/repack-libreoffice-core.sh /tmp/repack-libreoffice-core.sh
 RUN apt-get update && \
@@ -34,7 +33,8 @@ RUN apt-get update && \
     sh /tmp/repack-libreoffice-core.sh libreoffice-core_*.deb && \
     apt-get install -y --no-install-recommends imagemagick libreoffice-writer ./libreoffice-core-writer-only.deb \
         libjpeg-turbo8 libpng16-16t64 libssl3t64 zlib1g \
-        fonts-dejavu-core fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea && \
+        fonts-dejavu-core fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea \
+        fonts-freefont-ttf fonts-ipafont-gothic fonts-noto-color-emoji fonts-tlwg-loma-otf fonts-unifont fonts-wqy-zenhei && \
     cd / && rm -rf "$office_dir" /var/lib/apt/lists/* && \
     unlink /tmp/repack-libreoffice-core.sh && \
     install -d -m 0700 -o app -g app /scratch
@@ -43,10 +43,7 @@ COPY docker/imagemagick-policy.xml /etc/ImageMagick-6/policy.xml
 FROM runtime-deps AS runtime
 WORKDIR /app
 COPY --from=build /out ./
-RUN TMPDIR=/tmp dotnet OssPdf.dll --install-chromium && \
-    chmod a+rx .playwright/node/*/node && \
-    rm -rf /var/lib/apt/lists/* && \
-    ! dpkg-query -W -f='${db:Status-Abbrev} ${binary:Package}\n' | grep -Eq '^ii +([^ ]*poppler|ghostscript|libgs[0-9])'
+RUN ! dpkg-query -W -f='${db:Status-Abbrev} ${binary:Package}\n' | grep -Eq '^ii +([^ ]*poppler|ghostscript|libgs[0-9])'
 COPY --from=qpdf-build /out/ /
 COPY --from=build /root/.nuget/packages/skiasharp.nativeassets.linux.nodependencies/4.150.1/LICENSE.txt \
     /root/.nuget/packages/skiasharp.nativeassets.linux.nodependencies/4.150.1/THIRD-PARTY-NOTICES.txt \

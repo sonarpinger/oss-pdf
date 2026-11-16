@@ -128,7 +128,7 @@ def benchmark(args, image, fixture, mime):
     directory.mkdir(parents=True)
     container = f"oss-image-bench-{uuid.uuid4().hex[:8]}"
     run = [args.engine, "run", "-d", "--name", container, "--init", "--cpus=2", "--memory=8g",
-           "--memory-swap=8g", "--shm-size=256m", "-e", "Pdf__RasterConcurrency=1",
+           "--memory-swap=8g", "-e", "Pdf__RasterConcurrency=1",
            "-e", "Pdf__QueueWaitMilliseconds=500", "-p", "127.0.0.1::8080"]
     if args.app_cores:
         run += ["--entrypoint", "/usr/bin/taskset", image, "-c", args.app_cores, "dotnet", "OssPdf.dll"]

@@ -14,16 +14,6 @@
         "resolved": "1.7.0",
         "contentHash": "YSZRrmdxHumD2SSt5ZmFZmdHnkMaf8sPAi93Wmwsy/G/MGa+nQ6ZCVgGQ3gvd6QT/tL/QrYHFk9/XRcGRzCHIw=="
       },
-      "Microsoft.Playwright": {
-        "type": "Direct",
-        "requested": "[1.64.1, )",
-        "resolved": "1.64.1",
-        "contentHash": "DO8plHiCCUS/54XZxhsuzGtxI4RkyJ/5XOlVFoT0A0K1jNYdGhntry36ivkPjcCbv0uz6P/PmJ35gUgnAYGbiw==",
-        "dependencies": {
-          "Microsoft.Bcl.AsyncInterfaces": "6.0.0",
-          "System.ComponentModel.Annotations": "5.0.0"
-        }
-      },
       "PDFsharp": {
         "type": "Direct",
         "requested": "[6.2.4, )",
@@ -55,11 +45,6 @@
         "resolved": "8.0.2",
         "contentHash": "VWACYq0JGxi9sw3TonSSV4B2MfhYk5nhgOtp9wbrt5NFOtUetFqHkMZylcCwPX+117cBJH5EnIzIy6X4OKn/kA=="
       },
-      "Microsoft.Bcl.AsyncInterfaces": {
-        "type": "Transitive",
-        "resolved": "6.0.0",
-        "contentHash": "UcSjPsst+DfAdJGVDsu346FX0ci0ah+lw3WRtn18NUwEqRt70HaOQ7lI72vy3+1LxtqI3T5GWwV39rQSrCzAeg=="
-      },
       "SkiaSharp.NativeAssets.macOS": {
         "type": "Transitive",
         "resolved": "4.150.1",
@@ -69,11 +54,6 @@
         "type": "Transitive",
         "resolved": "4.150.1",
         "contentHash": "qrLSL8OonbkMJdSH8heK0Jl39Y2xxZGdd7Ru4cyBXk2ITdx+Fu1sCFLmvCKmnMaYs//mlN/YSpSpOurEXErcQw=="
-      },
-      "System.ComponentModel.Annotations": {
-        "type": "Transitive",
-        "resolved": "5.0.0",
-        "contentHash": "dMkqfy2el8A8/I76n2Hi1oBFEbG1SfxD2l5nhwXV3XjlnOmwxJlQbYpJH4W51odnU9sARCSAgv7S3CyAFMkpYg=="
       }
     }
   }

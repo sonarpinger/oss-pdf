@@ -6,10 +6,10 @@ A self-hosted .NET 10 PDF API with ASP.NET Core Minimal API endpoints. Designed 
 
 ```sh
 docker build -t oss-pdf .
-docker run --rm --init --shm-size=256m -p 127.0.0.1:8080:8080 oss-pdf
+docker run --rm --init -p 127.0.0.1:8080:8080 oss-pdf
 ```
 
-Ironpress is the default renderer for `/HtmlToPdf`. Set `Pdf__HtmlRenderer=Playwright` on the container to opt in to Chromium. When selected, Chromium runs as a non-root user with its sandbox enabled. The container runtime must allow Chromium to create an unprivileged user namespace. [Playwright Docker guide](https://playwright.dev/dotnet/docs/docker#crawling-and-scraping)
+`/HtmlToPdf` uses Ironpress.
 
 The service is intended for an internal network or an authenticated gateway. Keep the gateway's request size limit aligned with the application's 60 MB limit (60,000,000 bytes for the entire request body). Keep worker scratch storage local and ephemeral. Requests can run for up to 120 seconds by default, including upload time once admitted.
 
@@ -29,7 +29,7 @@ All four multipart endpoints accept an optional text field named `fileName`, suc
 
 Omitting `fileName` or leaving it blank uses `document.pdf` for HTML and Word, `compressed.pdf` for compression, `merged.pdf` for merges, and `image.pdf` for images.
 
-HTML prints on Letter paper. Margins are in millimeters and default to 12 mm, or 20 mm on a side with a header or footer. Use inline styles and embed any assets in the supplied HTML. JavaScript and external resource loading are disabled. In either renderer, use elements with class `pageNumber` and `totalPages` inside the HTML header or footer to insert page numbers. For example, `Page <span class="pageNumber"></span> of <span class="totalPages"></span>`.
+HTML prints on Letter paper. Margins are in millimeters and default to 12 mm, or 20 mm on a side with a header or footer. Use inline styles and embed any assets in the supplied HTML. JavaScript and external resource loading are disabled. Use elements with class `pageNumber` and `totalPages` inside the HTML header or footer to insert page numbers. For example, `Page <span class="pageNumber"></span> of <span class="totalPages"></span>`.
 
 Higher compression quality favors fidelity. For scans, `/Compress` preserves the pixel dimensions of embedded images. Some inputs can produce a larger output. To downsample a JPEG or PNG while creating a PDF, use `profile=small` on `/ImageToPdf`.
 
@@ -102,7 +102,20 @@ python3 tests/docker_smoke.py http://127.0.0.1:8080 --load
 
 Use `--cpus=2 --memory=8g --memory-swap=8g` on the container for a local test with the CPU and RAM budget of a single Azure App Service P1v3 instance.
 
-#### Ironpress and Playwright on a local P1v3-equivalent container
+### HTML-to-PDF benchmark
+
+Run the Ironpress benchmark from a Linux host with cgroup v2, k6, pypdf, and Pillow.
+
+```sh
+docker build -t oss-pdf:html-benchmark .
+python3 tests/html_benchmark/run.py --fixture two-page-letter --fixture image-report
+```
+
+After removing the browser, the two-page letter and the six-page report with 12 images matched the previous Ironpress build pixel for pixel at 144 DPI. The letter retained both page numbers.
+
+#### Historical renderer comparison on a local P1v3-equivalent container
+
+These results were recorded before the Playwright option was removed.
 
 | Fixture | Renderer | Offered req/s | Valid PDFs/s | p95 | Valid responses |
 | --- | --- | ---: | ---: | ---: | ---: |

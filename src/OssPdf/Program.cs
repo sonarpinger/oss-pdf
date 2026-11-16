@@ -1,10 +1,5 @@
 using OssPdf;
 
-if (args is ["--install-chromium"])
-{
-    return Microsoft.Playwright.Program.Main(["install", "--with-deps", "--only-shell", "chromium"]);
-}
-
 if (args is ["--ironpress-worker"])
 {
     IronpressWorker.Run();

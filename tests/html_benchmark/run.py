@@ -57,17 +57,15 @@ def read_counters(path):
 
 
 def sample_resources(path):
-    browsers, workers = set(), set()
+    workers = set()
     for pid in (path / "cgroup.procs").read_text().split():
         try:
             argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
         except (FileNotFoundError, PermissionError, ProcessLookupError):
             continue
-        if argv[0].endswith(b"/chrome-headless-shell") and not any(arg.startswith(b"--type=") for arg in argv):
-            browsers.add(int(pid))
         if b"--ironpress-worker" in argv:
             workers.add(int(pid))
-    return int((path / "memory.current").read_text()), browsers, workers
+    return int((path / "memory.current").read_text()), workers
 
 
 def image_draws(page):
@@ -134,7 +132,7 @@ def run_stage(args, fixture, url, directory, container, cgroup, name, rate, dura
     started = datetime.now(timezone.utc).isoformat()
     before_cpu = read_counters(cgroup / "cpu.stat")
     before_memory = read_counters(cgroup / "memory.events")
-    start_usage, browsers, workers = sample_resources(cgroup)
+    start_usage, workers = sample_resources(cgroup)
     samples = [start_usage]
     arrival_rate = Fraction(str(rate))
     upload_options = ["-e", f"UPLOAD_MIME={upload_mime}"] if upload_mime else []
@@ -154,16 +152,14 @@ def run_stage(args, fixture, url, directory, container, cgroup, name, rate, dura
                     result = process.wait(timeout=1)
                     break
                 except subprocess.TimeoutExpired:
-                    usage, browser_pids, worker_pids = sample_resources(cgroup)
+                    usage, worker_pids = sample_resources(cgroup)
                     samples.append(usage)
-                    browsers.update(browser_pids)
                     workers.update(worker_pids)
         elapsed = time.monotonic() - start_time
     if result != 0:
         raise RuntimeError(f"k6 exited with status {result}; see {directory / (name + '.log')}")
 
-    end_usage, browser_pids, worker_pids = sample_resources(cgroup)
-    browsers.update(browser_pids)
+    end_usage, worker_pids = sample_resources(cgroup)
     workers.update(worker_pids)
     after_cpu = read_counters(cgroup / "cpu.stat")
     after_memory = read_counters(cgroup / "memory.events")
@@ -178,12 +174,10 @@ def run_stage(args, fixture, url, directory, container, cgroup, name, rate, dura
     if args.p95_ms is not None:
         successful &= 0 < latency.get("p(95)", 0) <= args.p95_ms
     oom_kills = after_memory.get("oom_kill", 0) - before_memory.get("oom_kill", 0)
-    if args.renderer == "playwright":
-        renderer_stable = len(browsers) == 1 and not workers
-    elif args.renderer in ("imagemagick", "small"):
-        renderer_stable = not browsers and not workers
+    if upload_mime and args.renderer in ("imagemagick", "small"):
+        renderer_stable = not workers
     else:
-        renderer_stable = 1 <= len(workers) <= (1 if upload_mime else 2) and not browsers
+        renderer_stable = 1 <= len(workers) <= (1 if upload_mime else 2)
     successful &= oom_kills == 0 and renderer_stable
     container_log = subprocess.run(
         [args.engine, "logs", "--since", started, container], capture_output=True, text=True, check=True,
@@ -209,7 +203,7 @@ def run_stage(args, fixture, url, directory, container, cgroup, name, rate, dura
         "memory_start_mib": round(start_usage / 2**20, 1),
         "peak_memory_mib": round(max(*samples, end_usage) / 2**20, 1),
         "memory_end_mib": round(end_usage / 2**20, 1),
-        "oom_kills": oom_kills, "chromium_browser_pids": sorted(browsers), "ironpress_worker_pids": sorted(workers),
+        "oom_kills": oom_kills, "ironpress_worker_pids": sorted(workers),
         **counts,
     }
     print(
@@ -229,10 +223,9 @@ def benchmark_fixture(args, name, destination, publish):
     container = f"oss-pdf-html-{uuid.uuid4().hex[:8]}"
     url = f"http://127.0.0.1:{args.port}"
     run_args = [
-        args.engine, "run", "-d", "--name", container, "--init", "--shm-size=256m",
+        args.engine, "run", "-d", "--name", container, "--init",
         "--cpus=2", "--memory=8g", "--memory-swap=8g", "-p", f"127.0.0.1:{args.port}:8080",
         "-e", "Pdf__HtmlConcurrency=2", "-e", "Pdf__QueueWaitMilliseconds=500",
-        "-e", f"Pdf__HtmlRenderer={args.renderer}", "-e", "Pdf__ChromiumSandbox=true",
     ]
     if args.app_cores:
         run_args += ["--entrypoint", "/usr/bin/taskset", args.image, "-c", args.app_cores, "dotnet", "OssPdf.dll"]
@@ -323,7 +316,7 @@ def save_results(results, destination):
     (destination / "results.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
     lines = [
         "# HTML-to-PDF throughput", "",
-        f"- Renderer: {results['configuration']['renderer']}",
+        "- Renderer: Ironpress",
         f"- Image ID: `{results['image_id']}`",
         f"- Host: {results['host']}",
         f"- k6: {results['k6']}",
@@ -371,7 +364,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", default="oss-pdf:html-benchmark")
     parser.add_argument("--engine", default="docker")
-    parser.add_argument("--renderer", choices=("ironpress", "playwright"), default="ironpress")
     parser.add_argument("--k6", default="k6")
     parser.add_argument("--port", type=int, default=18080)
     parser.add_argument("--output", type=Path, default=Path("untracked/html-to-pdf-benchmark"))
