@@ -1,6 +1,6 @@
 # oss-pdf
 
-A self-hosted PDF API built with ASP.NET Core Minimal APIs on .NET 10. See [Design.md](Design.md) for the original requirements.
+A self-hosted .NET 10 PDF API with ASP.NET Core Minimal API endpoints. Designed to run most business required flows while using software with permissible licensing. The ideal case being a central PDF API deployed internally at an organization.
 
 ## Run
 
@@ -25,7 +25,7 @@ All routes accept `POST`. A successful response is a PDF attachment. Multipart p
 | `/Merge` | Two or more multipart `files` parts with `application/pdf`, in output order. |
 | `/ImageToPdf` | Multipart `file` with `image/jpeg` or `image/png`. The image is oriented automatically and composited on white. The default embeds the original pixels using Ironpress. Optional `profile=small` embeds a downsampled JPEG in a PDF of the same physical page size. |
 
-All four multipart endpoints accept an optional text field named `fileName`, such as `-F 'fileName=invoice'`. Like the JSON field on `/HtmlToPdf`, it sets the download name in `Content-Disposition`. The API trims surrounding whitespace and adds `.pdf` if the name lacks that extension. Nonblank names are limited to 132 UTF-16 code units before trimming and cannot contain slashes, backslashes, or control characters.
+All four multipart endpoints accept an optional text field named `fileName`, such as `-F 'fileName=invoice'`. Like the JSON field on `/HtmlToPdf`, it sets the download name in `Content-Disposition`. The API trims surrounding whitespace and adds `.pdf` if the name lacks that extension.
 
 Omitting `fileName` or leaving it blank uses `document.pdf` for HTML and Word, `compressed.pdf` for compression, `merged.pdf` for merges, and `image.pdf` for images.
 
@@ -92,7 +92,7 @@ curl --fail-with-body -OJ \
 
 ## Limits and validation
 
-The default limits include 200 pages per PDF or merged output, up to 32 files per merge, 25 million pixels per decoded image, 512 MiB of monitored scratch space per job, and 128 MiB per output. Set `Pdf__HtmlConcurrency`, `Pdf__WordConcurrency`, `Pdf__PdfConcurrency`, and `Pdf__RasterConcurrency` to tune parallelism. Defaults are 2 HTML, 2 Word, 2 compression/merge, and 1 image-to-PDF job at a time. Ironpress uses reusable worker processes and terminates the active worker when a conversion is canceled or times out. The service logs queue and conversion timings.
+The default limits include 200 pages per PDF or merged output, up to 32 files per merge, 25 million pixels per decoded image, 512 MiB of monitored scratch space per job, and 128 MiB per output. Set `Pdf__HtmlConcurrency`, `Pdf__WordConcurrency`, `Pdf__PdfConcurrency`, and `Pdf__RasterConcurrency` to tune parallelism. Defaults are 2 HTML, 2 Word, 2 compression/merge, and 1 image-to-PDF job at a time.
 
 Run the container smoke suite from a host with Python 3, pypdf, curl, and ImageMagick.
 
@@ -102,27 +102,7 @@ python3 tests/docker_smoke.py http://127.0.0.1:8080 --load
 
 Use `--cpus=2 --memory=8g --memory-swap=8g` on the container for a local test with the CPU and RAM budget of a single Azure App Service P1v3 instance.
 
-### HTML-to-PDF throughput
-
-Run the k6 benchmark from a Linux host with cgroup v2, k6, and Python with `pypdf` and Pillow installed. The runner starts a fresh container for each fixture. It uses two CPUs, 8 GiB of memory, no swap, and two HTML conversion slots. The fixtures are a one-page letter, a two-page letter with page numbers, an eight-page report, and a six-page report with 12 embedded images.
-
-```sh
-docker build -t oss-pdf:html-benchmark .
-for renderer in ironpress playwright; do
-  python3 tests/html_benchmark/run.py --renderer "$renderer" \
-    --fixture letter --fixture two-page-letter --probe-rps 40 --probe-rps 60 \
-    --max-rps 180 --output "untracked/html-renderer-benchmark/$renderer-letters"
-  python3 tests/html_benchmark/run.py --renderer "$renderer" \
-    --fixture image-report --max-rps 16 \
-    --output "untracked/html-renderer-benchmark/$renderer-image-report"
-done
-```
-
-The runner measures the first conversion, validates page counts and fixture contents, warms up the selected renderer, and probes fixed arrival rates. It repeats the highest passing rate before a final steady run. A run passes with at least 99% valid PDFs, zero dropped iterations, zero OOM kills, and stable renderer processes in the samples. Use `--p95-ms` to add a latency target. The defaults are 30-second warmups, two-minute probes, three five-minute confirmations, and a 15-minute steady run. The result directory includes Markdown and JSON reports, input fixtures, and individual k6 summaries.
-
-#### Ironpress and Playwright on the local P1v3-equivalent container
-
-k6 v2.4.0 ran on an ARM64 Apple M1 Pro host with Podman. Each fixture used a 10-second warmup, 8-second probes, two 20-second confirmations, and a 60-second final run. The table shows the highest tested offered rate that passed the final run and p95 latency for valid responses.
+#### Ironpress and Playwright on a local P1v3-equivalent container
 
 | Fixture | Renderer | Offered req/s | Valid PDFs/s | p95 | Valid responses |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -133,47 +113,9 @@ k6 v2.4.0 ran on an ARM64 Apple M1 Pro host with Podman. Each fixture used a 10-
 | Six-page report with 12 embedded images | Ironpress | 11 | 10.93 | 632 ms | 99.39% |
 | Six-page report with 12 embedded images | Playwright | 2 | 2.00 | 482 ms | 100% |
 
-Ironpress returned a valid PDF for every request in the 40 and 60 req/s probes for both letter fixtures. At 60 req/s, p95 was 19 ms for the one-page letter and 36 ms for the numbered two-page letter. The one-page letter also held 180 req/s at 17 ms p95 in a 60-second run. Additional probes at 280 and 360 req/s missed the 99% threshold. To reproduce the limit search, run the Ironpress letter fixture with `--probe-rps 280 --probe-rps 360 --max-rps 480`.
-
-At a matched 2 req/s in the image-report probes, p95 was 259 ms for Ironpress and 509 ms for Playwright. The host ran out of memory during the first Playwright image-report final run. The table uses a fresh-container retry at 2 req/s with the same limits and durations.
-
-#### Earlier Playwright baseline
-
-On November 15, 2026, k6 v2.4.0 tested each fixture separately against a local ARM64 container running on Podman with two CPUs, 8 GiB of RAM, swap disabled, and two HTML conversion slots. This run used a 30-second warmup, 12-second probes, three 20-second confirmation runs, and a 90-second final run per fixture.
-
-| Fixture | Offered requests/sec | Valid PDFs/sec | p95 latency | Valid responses |
-| --- | ---: | ---: | ---: | ---: |
-| One-page letter | 40 | 39.69 | 545 ms | 99.22% |
-| Eight-page report | 21 | 21.00 | 213 ms | 100% |
-| Six-page report with 12 embedded images | 2 | 2.00 | 789 ms | 100% |
-
-Each row shows the highest tested whole-number rate that passed the final run. Latency is measured for valid PDF responses, and k6 dropped zero iterations at these rates. The letter returned 28 HTTP 503 responses at 40 requests/sec. The image-heavy report returned 98.15% valid PDFs at 3 requests/sec, below the 99% threshold. At 2 requests/sec, it peaked at 5.46 GiB of container memory. Long-duration memory stability still needs a longer run.
-
-### Image-to-PDF throughput
-
-The benchmark compares the original ImageMagick PDF writer with the Ironpress path. The Ironpress path uses ImageMagick to orient the image, composite transparency on white, and produce an RGB PNG for the PDF writer. Run on a Linux host with cgroup v2, k6, curl, `pdftoppm`, and Python with `pypdf` and Pillow installed.
-
-```sh
-git archive b06b5dde527d6d6d1a701dfdb29525574fb62ec7 | docker build -t oss-pdf:image-imagemagick -
-docker build -t oss-pdf:image-ironpress .
-python3 tests/html_benchmark/run_image.py \
-  --baseline oss-pdf:image-imagemagick --candidate oss-pdf:image-ironpress
-```
-
-The runner uses two CPUs, 8 GiB of memory, zero swap, and one raster slot. It tests a rotated JPEG and a transparent PNG, checks one-page output, 150 DPI dimensions and rendered pixels, and confirms the highest passing rate from the selected load steps. Raw k6 results and sample PDFs are saved under `untracked/image-to-pdf-benchmark` by default.
-
-On the local ARM64 Podman host, the highest passing load steps below each returned valid PDFs for all requests in the 30-second run. This comparison used 5-second warmups, 6-second probes, and `--rates 2 4 8 10 12 14 16 20 24 32 48 64`.
-
-| Fixture | ImageMagick writer | Ironpress writer |
-| --- | ---: | ---: |
-| Rotated JPEG, 800 × 1200 px after rotation | 12 PDFs/s, 95 ms p95 | 8 PDFs/s, 154 ms p95 |
-| Transparent PNG, 640 × 480 px | 10 PDFs/s, 130 ms p95 | 16 PDFs/s, 113 ms p95 |
-
-At a matched 10 requests/s for the PNG, p95 was 128 ms with ImageMagick and 82 ms with Ironpress. The sample JPEG PDF grew from 390 KB to 1.26 MB because the Ironpress path stores the normalized pixels as PNG.
-
 ### Small image PDF profile
 
-The profile defaults to a finished PDF target of 100,000 bytes. Add the multipart field `targetBytes` with a positive integer to choose another target. This field requires `profile=small`. [250 KB curl example](#imagetopdf)
+The profile defaults to a finished PDF target of 100,000 bytes. Add the multipart field `targetBytes` with a positive integer to choose another target. This field requires `profile=small`.
 
 The profile preserves the default page size calculated from the oriented image at 150 DPI while reducing the number of embedded pixels. It starts with a longest side of up to 1,600 pixels and JPEG quality 76, then tries smaller dimensions with a floor of 640 pixels on the longest side, or the original size for smaller inputs. The final fallback uses JPEG quality 50. The target is best effort because the PDF can exceed it at those floors.
 
@@ -193,18 +135,8 @@ In an 80-second run on the local ARM64 Podman host, both paths returned 20 valid
 | --- | --- | --- |
 | 22.05 MB transparent PNG | 615.5 KB PDF · 1,367 ms p95 | 93.7 KB PDF · 561 ms p95 |
 
-### Scan compression comparison
-
-To compare `/Compress` against a baseline, install Pillow alongside pypdf and run the benchmark with both containers listening on separate ports. It generates three synthetic 300 DPI scans and measures output bytes and embedded image dimensions at three quality levels.
-
-```sh
-python3 tests/compare_scan_compression.py http://127.0.0.1:18081 http://127.0.0.1:18080
-```
-
 ## Licensing
 
 The API source is available under the [MIT License](LICENSE). qpdf is [Apache 2.0 licensed](https://qpdf.readthedocs.io/en/stable/license.html) and ImageMagick uses the [ImageMagick License](https://imagemagick.org/license/). The image includes their notices and Ubuntu package notices under `/usr/local/share/doc` and `/usr/share/doc`. The Docker build repackages Ubuntu's LibreOffice core to omit its optional Poppler-based PDF importer. Writer still exports DOCX to PDF. Use the exact versions installed in a distributed image when making corresponding third-party source available, and provide recipients and service users access to the corresponding application source as required by the applicable licenses.
 
 Ironpress and Html Agility Pack use the MIT License. Their notices are included under `/usr/local/share/doc/oss-pdf`. SkiaSharp's license and third-party notices are under `/usr/local/share/doc/skiasharp`. [Ironpress license](https://github.com/gastongouron/ironpress/blob/v1.7.0/LICENSE) · [Html Agility Pack license](https://github.com/zzzprojects/html-agility-pack/blob/v1.13.1/LICENSE)
-
-The independently implemented upload and conversion flow was informed by [pdf2img](https://github.com/joanfabregat/pdf2img), an MIT-licensed reference.
