@@ -25,6 +25,10 @@ All routes accept `POST`. A successful response is a PDF attachment. Multipart p
 | `/Merge` | Two or more multipart `files` parts with `application/pdf`, in output order. |
 | `/ImageToPdf` | Multipart `file` with `image/jpeg` or `image/png`. The image is oriented automatically and composited on white. The default embeds the original pixels using Ironpress. Optional `profile=small` embeds a downsampled JPEG in a PDF of the same physical page size. |
 
+All four multipart endpoints accept an optional text field named `fileName`, such as `-F 'fileName=invoice'`. Like the JSON field on `/HtmlToPdf`, it sets the download name in `Content-Disposition`. The API trims surrounding whitespace and adds `.pdf` if the name lacks that extension. Nonblank names are limited to 132 UTF-16 code units before trimming and cannot contain slashes, backslashes, or control characters.
+
+Omitting `fileName` or leaving it blank uses `document.pdf` for HTML and Word, `compressed.pdf` for compression, `merged.pdf` for merges, and `image.pdf` for images.
+
 HTML prints on Letter paper. Margins are in millimeters and default to 12 mm, or 20 mm on a side with a header or footer. Use inline styles and embed any assets in the supplied HTML. JavaScript and external resource loading are disabled. In either renderer, use elements with class `pageNumber` and `totalPages` inside the HTML header or footer to insert page numbers. For example, `Page <span class="pageNumber"></span> of <span class="totalPages"></span>`.
 
 Higher compression quality favors fidelity. For scans, `/Compress` preserves the pixel dimensions of embedded images. Some inputs can produce a larger output. To downsample a JPEG or PNG while creating a PDF, use `profile=small` on `/ImageToPdf`.

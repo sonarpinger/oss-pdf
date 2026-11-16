@@ -5,6 +5,7 @@ import argparse
 import concurrent.futures
 import json
 import math
+import re
 import struct
 import subprocess
 import tempfile
@@ -13,6 +14,7 @@ import unicodedata
 import zipfile
 import zlib
 from pathlib import Path
+from urllib.parse import unquote
 
 from pypdf import PdfReader, PdfWriter
 
@@ -109,7 +111,7 @@ def main():
         write_docx(docx)
         write_images(png, jpeg)
 
-        def request(route, name, *arguments, expected=200):
+        def request(route, name, *arguments, expected=200, download_name=None):
             output = root / name
             headers = root / f"{name}.headers"
             status = command(
@@ -120,7 +122,12 @@ def main():
             if expected == 200:
                 with output.open("rb") as response:
                     assert response.read(5) == b"%PDF-", route
-                assert "content-type: application/pdf" in headers.read_text().lower(), route
+                response_headers = headers.read_text()
+                assert "content-type: application/pdf" in response_headers.lower(), route
+                if download_name is not None:
+                    match = re.search(r"^Content-Disposition: attachment;[^\n]*\bfilename\*=UTF-8''([^\s;]+)",
+                                      response_headers, re.IGNORECASE | re.MULTILINE)
+                    assert match and unquote(match[1]) == download_name, (route, download_name, response_headers)
             return output
 
         payload = json.dumps({
@@ -133,11 +140,10 @@ def main():
         word_args = ("-F", f"file=@{docx};type=application/zip")
         compress_args = ("-F", f"file=@{pdf};type=application/pdf", "-F", "quality=55")
 
-        html = request("HtmlToPdf", "html.pdf", *html_args)
+        html = request("HtmlToPdf", "html.pdf", *html_args, download_name="custom.pdf")
         html_text = text(html)
         assert all(label in html_text for label in ("Generated HTML fixture", "Header fixture", "Footer fixture"))
         assert "JS-EXECUTED" not in html_text
-        assert "custom.pdf" in (root / "html.pdf.headers").read_text()
         numbered_payload = json.dumps({
             "body": '<p>First sheet</p><p style="break-before:page">Second sheet</p>',
             "header": '<div style="font:10px sans-serif">Sheet <strong class="another pageNumber">x</strong></div>',
@@ -145,31 +151,32 @@ def main():
                       ' of <span class="totalPages"></span></div>',
         })
         numbered = request("HtmlToPdf", "numbered.pdf", "-H", "Content-Type: application/json",
-                           "--data-binary", numbered_payload)
+                           "--data-binary", numbered_payload, download_name="document.pdf")
         assert pages(numbered) == [(612.0, 792.0)] * 2
         for number, page in enumerate(PdfReader(numbered).pages, 1):
             page_text = " ".join(page.extract_text().split())
             assert f"Sheet {number}" in page_text and f"Page {number} of 2" in page_text, page_text
             assert f"{['First', 'Second'][number - 1]} sheet" in page_text, page_text
-        word = request("WordToPdf", "word.pdf", *word_args)
+        word = request("WordToPdf", "word.pdf", *word_args, download_name="document.pdf")
         assert "Generated Word fixture" in text(word)
-        compressed = request("Compress", "compressed.pdf", *compress_args)
+        compressed = request("Compress", "compressed.pdf", *compress_args, download_name="compressed.pdf")
         assert "VECTOR ONE" in text(compressed) and "VECTOR TWO" in text(compressed)
         # The source contains a path and text, with no images to carry a flattened page.
         assert image_count(compressed) == 0
         request("ImageCompress", "retired-route.json", *compress_args, expected=404)
-        merged = request("Merge", "merged.pdf",
-                         "-F", f"files=@{word};type=application/pdf", "-F", f"files=@{pdf};type=application/pdf")
+        merge_args = ("-F", f"files=@{word};type=application/pdf", "-F", f"files=@{pdf};type=application/pdf")
+        merged = request("Merge", "merged.pdf", *merge_args, download_name="merged.pdf")
         assert len(pages(merged)) == 3
         merged_text = text(merged)
         assert merged_text.index("Generated Word fixture") < merged_text.index("VECTOR ONE") < merged_text.index("VECTOR TWO")
-        png_pdf = request("ImageToPdf", "png.pdf", "-F", f"file=@{png};type=image/png")
+        png_args = ("-F", f"file=@{png};type=image/png")
+        png_pdf = request("ImageToPdf", "png.pdf", *png_args, download_name="image.pdf")
         jpeg_pdf = request("ImageToPdf", "jpeg.pdf", "-F", f"file=@{jpeg};type=image/jpeg")
         assert pages(png_pdf) == [(144.0, 57.6)], pages(png_pdf)
         assert pages(jpeg_pdf) == [(57.6, 144.0)], pages(jpeg_pdf)
         for source, mime, original in ((png, "image/png", png_pdf), (jpeg, "image/jpeg", jpeg_pdf)):
             small = request("ImageToPdf", f"small-{source.stem}{source.suffix}.pdf",
-                            "-F", "profile=small", "-F", f"file=@{source};type={mime}")
+                            "-F", "profile=small", "-F", f"file=@{source};type={mime}", download_name="image.pdf")
             assert pages(small) == pages(original)
             assert small.stat().st_size <= 100_000
             assert image_count(small) == 1
@@ -193,6 +200,26 @@ def main():
         request("ImageToPdf", "duplicate-target.json", "-F", f"file=@{png};type=image/png",
                 "-F", "profile=small", "-F", "targetBytes=100000", "-F", "targetBytes=250000", expected=400)
 
+        for route, arguments, supplied, expected in (
+            ("WordToPdf", word_args, "  Quarterly report  ", "Quarterly report.pdf"),
+            ("Compress", compress_args, "reduced.PDF", "reduced.PDF"),
+            ("Merge", merge_args, "Résumé 合本", "Résumé 合本.pdf"),
+            ("ImageToPdf", (*png_args, "-F", "profile=small", "-F", "targetBytes=250000"), "photo", "photo.pdf"),
+        ):
+            request(route, f"{route}-named.pdf", "--form-string", f"fileName={supplied}", *arguments,
+                    download_name=expected)
+            request(route, f"{route}-invalid-name.json", *arguments, "--form-string", "fileName=../invalid", expected=400)
+        for blank in ("", "\t  ", " " * 133):
+            request("ImageToPdf", "blank-name.pdf", *png_args, "--form-string", f"fileName={blank}",
+                    download_name="image.pdf")
+        for invalid in ("bad\\name", "bad\tname", "a" * 133):
+            request("ImageToPdf", "invalid-name.json", *png_args, "--form-string", f"fileName={invalid}", expected=400)
+        max_name = "é" * 132
+        request("ImageToPdf", "max-name.pdf", *png_args, "--form-string", f"fileName={max_name}",
+                download_name=max_name + ".pdf")
+        request("ImageToPdf", "duplicate-name.json", *png_args, "--form-string", "fileName=",
+                "--form-string", "fileName=second", expected=400)
+
         request("Compress", "wrong-type.json", "-F", f"file=@{pdf};type=text/plain", "-F", "quality=55", expected=415)
         request("ImageToPdf", "wrong-magic.json", "-F", f"file=@{png};type=image/jpeg", expected=415)
         request("Compress", "quality.json", "-F", f"file=@{pdf};type=application/pdf", "-F", "quality=101", expected=400)
@@ -215,6 +242,7 @@ def main():
         request("Compress", "chunked.json", "-H", "Transfer-Encoding: chunked",
                 "-F", f"file=@{oversized};type=application/pdf", "-F", "quality=55", expected=413)
         print("All five routes passed PDF output, validation, and request-size checks. /ImageCompress returned 404.")
+        print("All five routes returned the expected default and custom download names.")
 
         if args.load:
             mix = [

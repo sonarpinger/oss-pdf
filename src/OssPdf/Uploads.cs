@@ -9,7 +9,7 @@ namespace OssPdf;
 
 internal enum UploadKind { Pdf, Word, Image }
 
-internal sealed record UploadBatch(IReadOnlyList<string> Paths, int? Quality, long? ImagePdfTargetBytes);
+internal sealed record UploadBatch(IReadOnlyList<string> Paths, int? Quality, long? ImagePdfTargetBytes, string? FileName);
 
 internal static class Uploads
 {
@@ -26,6 +26,7 @@ internal static class Uploads
     {
         var paths = new List<string>();
         int? quality = null;
+        string? fileName = null;
         var smallImagePdf = false;
         long? targetBytes = null;
         try
@@ -57,6 +58,12 @@ internal static class Uploads
                 if (!isFile && field == "quality" && needsQuality && quality is null)
                 {
                     quality = await ReadQualityAsync(section.Body, cancellationToken);
+                    continue;
+                }
+
+                if (!isFile && field == "fileName" && fileName is null)
+                {
+                    fileName = await PdfFileName.ReadAsync(section.Body, cancellationToken);
                     continue;
                 }
 
@@ -98,7 +105,8 @@ internal static class Uploads
             throw new PdfRequestException(400, "targetBytes requires profile=small.");
         }
 
-        return new UploadBatch(paths, quality, smallImagePdf ? targetBytes ?? PdfLimits.DefaultSmallImagePdfTargetBytes : null);
+        long? imagePdfTargetBytes = smallImagePdf ? targetBytes ?? PdfLimits.DefaultSmallImagePdfTargetBytes : null;
+        return new UploadBatch(paths, quality, imagePdfTargetBytes, PdfFileName.Normalize(fileName));
     }
 
     private static string GetExtension(UploadKind kind, string? contentType)

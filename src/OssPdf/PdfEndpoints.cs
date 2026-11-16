@@ -31,7 +31,7 @@ public static class PdfEndpoints
                 throw new PdfRequestException(400, "An HTML conversion request is required.");
             }
 
-            var name = DownloadName(request.FileName);
+            var name = PdfFileName.Normalize(request.FileName) ?? "document.pdf";
             await renderer.RenderAsync(request, job, cancellationToken);
             await converters.CheckGeneratedPdfAsync(job, cancellationToken);
             return name;
@@ -45,7 +45,7 @@ public static class PdfEndpoints
             var upload = await Uploads.ReadAsync(reader, job, UploadKind.Word, false, 1, cancellationToken);
             await converters.WordToPdfAsync(job, upload.Paths[0], cancellationToken);
             await converters.CheckGeneratedPdfAsync(job, cancellationToken);
-            return "document.pdf";
+            return upload.FileName ?? "document.pdf";
         });
 
     [WolverinePost("/Compress")]
@@ -55,7 +55,7 @@ public static class PdfEndpoints
         {
             var upload = await Uploads.ReadAsync(reader, job, UploadKind.Pdf, true, 1, cancellationToken);
             await converters.CompressAsync(job, upload.Paths[0], upload.Quality!.Value, cancellationToken);
-            return "compressed.pdf";
+            return upload.FileName ?? "compressed.pdf";
         });
 
     [WolverinePost("/Merge")]
@@ -65,7 +65,7 @@ public static class PdfEndpoints
         {
             var upload = await Uploads.ReadAsync(reader, job, UploadKind.Pdf, false, options.Value.MaxMergeFiles, cancellationToken);
             await converters.MergeAsync(job, upload.Paths, cancellationToken);
-            return "merged.pdf";
+            return upload.FileName ?? "merged.pdf";
         });
 
     [WolverinePost("/ImageToPdf")]
@@ -75,22 +75,6 @@ public static class PdfEndpoints
         {
             var upload = await Uploads.ReadAsync(reader, job, UploadKind.Image, false, 1, cancellationToken);
             await converters.ImageToPdfAsync(job, upload.Paths[0], upload.ImagePdfTargetBytes, cancellationToken);
-            return "image.pdf";
+            return upload.FileName ?? "image.pdf";
         });
-
-    private static string DownloadName(string? name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return "document.pdf";
-        }
-
-        if (name.Length > 132 || name.Any(character => char.IsControl(character) || character is '/' or '\\'))
-        {
-            throw new PdfRequestException(400, "The PDF filename is invalid.");
-        }
-
-        name = name.Trim();
-        return name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) ? name : name + ".pdf";
-    }
 }
