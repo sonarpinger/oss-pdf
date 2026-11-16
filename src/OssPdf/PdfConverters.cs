@@ -6,7 +6,7 @@ using PdfSharp.Pdf;
 
 namespace OssPdf;
 
-public sealed class PdfConverters(IOptions<PdfLimits> options)
+public sealed class PdfConverters(IOptions<PdfLimits> options, IronpressWorker ironpress)
 {
     private const int RasterDpi = 150;
     private PdfLimits Limits => options.Value;
@@ -111,8 +111,10 @@ public sealed class PdfConverters(IOptions<PdfLimits> options)
 
         await NativeTool.RunAsync(job, "convert",
             [coder + input, "-auto-orient", "-background", "white", "-alpha", "remove", "-alpha", "off",
-                "-units", "PixelsPerInch", "-density", RasterDpi.ToString(CultureInfo.InvariantCulture),
-                "PDF:" + job.OutputPath], cancellationToken);
+                "-colorspace", "sRGB", "-strip", "-interlace", "none", "-depth", "8",
+                "-define", "png:color-type=2", "-define", "png:compression-level=1",
+                "PNG:" + job.PathFor(IronpressWorker.ImageFile)], cancellationToken);
+        await ironpress.RenderImageAsync(job, RasterDpi, cancellationToken);
     }
 
     public Task CheckGeneratedPdfAsync(PdfJob job, CancellationToken cancellationToken) =>

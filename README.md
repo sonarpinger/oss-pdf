@@ -24,7 +24,7 @@ All routes accept `POST`. A successful response is a PDF attachment. Multipart p
 | `/Compress` | Multipart `file` with `application/pdf` and integer `quality` from 1 to 100. qpdf optimizes PDF streams and eligible embedded images while retaining text, vector artwork, and image pixel dimensions. |
 | `/ImageCompress` | Multipart `file` with `application/pdf` and integer `quality` from 1 to 100. Pages become images at 150 DPI. |
 | `/Merge` | Two or more multipart `files` parts with `application/pdf`, in output order. |
-| `/ImageToPdf` | Multipart `file` with `image/jpeg` or `image/png`. The image is oriented automatically and placed on one page at 150 DPI. |
+| `/ImageToPdf` | Multipart `file` with `image/jpeg` or `image/png`. The image is oriented automatically, composited on white, and placed on one Ironpress PDF page at 150 DPI. |
 
 HTML prints on Letter paper. Margins are in millimeters and default to 12 mm, or 20 mm on a side with a header or footer. Use inline styles and embed any assets in the supplied HTML. JavaScript and external resource loading are disabled. In either renderer, use elements with class `pageNumber` and `totalPages` inside the HTML header or footer to insert page numbers. For example, `Page <span class="pageNumber"></span> of <span class="totalPages"></span>`.
 
@@ -96,6 +96,28 @@ On November 15, 2026, k6 v2.4.0 tested each fixture separately against a local A
 | Six-page report with 12 embedded images | 2 | 2.00 | 789 ms | 100% |
 
 Each row shows the highest tested whole-number rate that passed the final run. Latency is measured for valid PDF responses, and k6 dropped zero iterations at these rates. The letter returned 28 HTTP 503 responses at 40 requests/sec. The image-heavy report returned 98.15% valid PDFs at 3 requests/sec, below the 99% threshold. At 2 requests/sec, it peaked at 5.46 GiB of container memory. Long-duration memory stability still needs a longer run.
+
+### Image-to-PDF throughput
+
+The benchmark compares the original ImageMagick PDF writer with the Ironpress path. The Ironpress path uses ImageMagick to orient the image, composite transparency on white, and produce an RGB PNG for the PDF writer. Run on a Linux host with cgroup v2, k6, curl, `pdftoppm`, and Python with `pypdf` and Pillow installed.
+
+```sh
+git archive b06b5dde527d6d6d1a701dfdb29525574fb62ec7 | docker build -t oss-pdf:image-imagemagick -
+docker build -t oss-pdf:image-ironpress .
+python3 tests/html_benchmark/run_image.py \
+  --baseline oss-pdf:image-imagemagick --candidate oss-pdf:image-ironpress
+```
+
+The runner uses two CPUs, 8 GiB of memory, zero swap, and one raster slot. It tests a rotated JPEG and a transparent PNG, checks one-page output, 150 DPI dimensions and rendered pixels, and confirms the highest passing rate from the selected load steps. Raw k6 results and sample PDFs are saved under `untracked/image-to-pdf-benchmark` by default.
+
+On the local ARM64 Podman host, the highest passing load steps below each returned valid PDFs for all requests in the 30-second run. This comparison used 5-second warmups, 6-second probes, and `--rates 2 4 8 10 12 14 16 20 24 32 48 64`.
+
+| Fixture | ImageMagick writer | Ironpress writer |
+| --- | ---: | ---: |
+| Rotated JPEG, 800 × 1200 px after rotation | 12 PDFs/s, 95 ms p95 | 8 PDFs/s, 154 ms p95 |
+| Transparent PNG, 640 × 480 px | 10 PDFs/s, 130 ms p95 | 16 PDFs/s, 113 ms p95 |
+
+At a matched 10 requests/s for the PNG, p95 was 128 ms with ImageMagick and 82 ms with Ironpress. The sample JPEG PDF grew from 390 KB to 1.26 MB because the Ironpress path stores the normalized pixels as PNG.
 
 ### Scan compression comparison
 

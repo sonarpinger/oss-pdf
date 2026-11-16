@@ -38,7 +38,6 @@ RUN_COLUMNS = {
     "dropped_iterations": "Dropped",
     "peak_memory_mib": "Peak memory (MiB)",
 }
-LOG_TIMINGS = re.compile(r"/HtmlToPdf queue wait (\d+) ms, processing (\d+) ms")
 
 
 def command(*arguments):
@@ -128,19 +127,20 @@ def percentile95(values):
     return ordered[math.ceil(len(ordered) * 0.95) - 1] if ordered else None
 
 
-def run_stage(args, fixture, url, directory, container, cgroup, name, rate, duration):
+def run_stage(args, fixture, url, directory, container, cgroup, name, rate, duration, upload_mime=None):
     summary_path = directory / f"{name}.json"
     started = datetime.now(timezone.utc).isoformat()
     before_cpu = read_counters(cgroup / "cpu.stat")
     before_memory = read_counters(cgroup / "memory.events")
     start_usage, browsers, workers = sample_resources(cgroup)
     samples = [start_usage]
+    upload_options = ["-e", f"UPLOAD_MIME={upload_mime}"] if upload_mime else []
     with (directory / f"{name}.log").open("w") as log:
         start_time = time.monotonic()
         with subprocess.Popen(
             [args.k6, "run", "--quiet", "--no-color",
              "-e", f"BASE_URL={url}", "-e", f"FIXTURE={fixture}", "-e", f"RATE={rate}",
-             "-e", f"SECONDS={duration}", "-e", f"SUMMARY_PATH={summary_path}", str(SCRIPT)],
+             "-e", f"SECONDS={duration}", "-e", f"SUMMARY_PATH={summary_path}", *upload_options, str(SCRIPT)],
             stdout=log, stderr=subprocess.STDOUT,
         ) as process:
             while True:
@@ -172,15 +172,19 @@ def run_stage(args, fixture, url, directory, container, cgroup, name, rate, dura
     if args.p95_ms is not None:
         successful &= 0 < latency.get("p(95)", 0) <= args.p95_ms
     oom_kills = after_memory.get("oom_kill", 0) - before_memory.get("oom_kill", 0)
-    renderer_stable = (
-        len(browsers) == 1 and not workers if args.renderer == "playwright"
-        else 1 <= len(workers) <= 2 and not browsers
-    )
+    if args.renderer == "playwright":
+        renderer_stable = len(browsers) == 1 and not workers
+    elif args.renderer == "imagemagick":
+        renderer_stable = not browsers and not workers
+    else:
+        renderer_stable = 1 <= len(workers) <= (1 if upload_mime else 2) and not browsers
     successful &= oom_kills == 0 and renderer_stable
     container_log = subprocess.run(
         [args.engine, "logs", "--since", started, container], capture_output=True, text=True, check=True,
     )
-    timings = [tuple(map(int, pair)) for pair in LOG_TIMINGS.findall(container_log.stdout + container_log.stderr)]
+    route = "ImageToPdf" if upload_mime else "HtmlToPdf"
+    pattern = rf"/{route} queue wait (\d+) ms, processing (\d+) ms"
+    timings = [tuple(map(int, pair)) for pair in re.findall(pattern, container_log.stdout + container_log.stderr)]
     stage = {
         "stage": name, "scheduled_seconds": duration, "elapsed_seconds": round(elapsed, 3),
         "offered_rps": rate, "expected_requests": expected, "passed": bool(successful),

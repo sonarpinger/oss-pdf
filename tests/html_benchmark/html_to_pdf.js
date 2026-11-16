@@ -2,7 +2,11 @@ import execution from 'k6/execution';
 import http from 'k6/http';
 import { Counter, Trend } from 'k6/metrics';
 
-const fixture = open(__ENV.FIXTURE);
+const uploadMime = __ENV.UPLOAD_MIME;
+const fixture = uploadMime ? open(__ENV.FIXTURE, 'b') : open(__ENV.FIXTURE);
+const route = uploadMime ? 'ImageToPdf' : 'HtmlToPdf';
+const headers = uploadMime ? { Accept: 'application/pdf' } :
+    { 'Content-Type': 'application/json', Accept: 'application/pdf' };
 const rate = Number(__ENV.RATE);
 const seconds = Number(__ENV.SECONDS);
 const completed = new Counter('completed_requests');
@@ -42,8 +46,9 @@ export default function () {
     }
 
     const start = Date.now();
-    const response = http.post(`${__ENV.BASE_URL || 'http://127.0.0.1:8080'}/HtmlToPdf`, fixture, {
-        headers: { 'Content-Type': 'application/json', Accept: 'application/pdf' },
+    const body = uploadMime ? { file: http.file(fixture, __ENV.FIXTURE.split('/').pop(), uploadMime) } : fixture;
+    const response = http.post(`${__ENV.BASE_URL || 'http://127.0.0.1:8080'}/${route}`, body, {
+        headers,
         responseType: 'binary',
         timeout: '150s',
         redirects: 0,
