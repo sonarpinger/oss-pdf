@@ -108,7 +108,7 @@ python3 tests/html_benchmark/run.py --fixture two-page-letter --fixture image-re
 These results where recorded on a local container modeled off of a P1v3 web application container (`--cpus=2 --memory=8g`) 
 
 | Fixture | Offered req/s | Valid PDFs/s | p95 | Valid responses |
-| --- | --- | ---: | ---: | ---: | ---: |
+| --- | ---: | ---: | ---: | ---: |
 | One-page letter | 220 | 218.03 | 509 ms | 99.11% |
 | Two-page letter with page numbers | 84 | 83.62 | 520 ms | 99.54% |
 | Six-page report with 12 embedded images | 11 | 10.93 | 632 ms | 99.39% |
