@@ -85,18 +85,10 @@ public sealed class IronpressWorker : IAsyncDisposable
             await StopAsync(worker);
         }
 
-        var executable = Environment.ProcessPath ?? throw new InvalidOperationException("Application path is unavailable.");
-        var start = new ProcessStartInfo(executable)
-        {
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true
-        };
-        if (string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet", StringComparison.OrdinalIgnoreCase))
-        {
-            start.ArgumentList.Add(typeof(IronpressWorker).Assembly.Location);
-        }
-
+        var start = NativeTool.ApplicationStartInfo();
+        start.UseShellExecute = false;
+        start.RedirectStandardInput = true;
+        start.RedirectStandardOutput = true;
         start.ArgumentList.Add("--ironpress-worker");
         return Process.Start(start) ?? throw new InvalidOperationException("Could not start the Ironpress worker.");
     }

@@ -9,7 +9,7 @@ namespace OssPdf;
 
 internal enum UploadKind { Pdf, Word, Image }
 
-internal sealed record UploadBatch(IReadOnlyList<string> Paths, int? Quality);
+internal sealed record UploadBatch(IReadOnlyList<string> Paths, int? Quality, long? ImagePdfTargetBytes);
 
 internal static class Uploads
 {
@@ -26,6 +26,8 @@ internal static class Uploads
     {
         var paths = new List<string>();
         int? quality = null;
+        var smallImagePdf = false;
+        long? targetBytes = null;
         try
         {
             while (await reader.ReadNextSectionAsync(cancellationToken) is { } section)
@@ -58,6 +60,25 @@ internal static class Uploads
                     continue;
                 }
 
+                if (!isFile && field == "profile" && kind == UploadKind.Image && !smallImagePdf)
+                {
+                    var profile = new byte[6];
+                    var count = await section.Body.ReadAtLeastAsync(profile, profile.Length, false, cancellationToken);
+                    if (!profile.AsSpan(0, count).SequenceEqual("small"u8))
+                    {
+                        throw new PdfRequestException(400, "Image PDF profile must be small.");
+                    }
+
+                    smallImagePdf = true;
+                    continue;
+                }
+
+                if (!isFile && field == "targetBytes" && kind == UploadKind.Image && targetBytes is null)
+                {
+                    targetBytes = await ReadTargetBytesAsync(section.Body, cancellationToken);
+                    continue;
+                }
+
                 throw InvalidForm();
             }
         }
@@ -72,7 +93,12 @@ internal static class Uploads
             throw InvalidForm();
         }
 
-        return new UploadBatch(paths, quality);
+        if (targetBytes.HasValue && !smallImagePdf)
+        {
+            throw new PdfRequestException(400, "targetBytes requires profile=small.");
+        }
+
+        return new UploadBatch(paths, quality, smallImagePdf ? targetBytes ?? PdfLimits.DefaultSmallImagePdfTargetBytes : null);
     }
 
     private static string GetExtension(UploadKind kind, string? contentType)
@@ -210,6 +236,19 @@ internal static class Uploads
         }
 
         throw new PdfRequestException(400, "Quality must be an integer from 1 to 100.");
+    }
+
+    private static async Task<long> ReadTargetBytesAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        var bytes = new byte[20];
+        var count = await stream.ReadAtLeastAsync(bytes, bytes.Length, false, cancellationToken);
+        if (count < bytes.Length && long.TryParse(Encoding.ASCII.GetString(bytes, 0, count), NumberStyles.None,
+                CultureInfo.InvariantCulture, out var targetBytes) && targetBytes > 0)
+        {
+            return targetBytes;
+        }
+
+        throw new PdfRequestException(400, "targetBytes must be a positive integer.");
     }
 
     private static PdfRequestException InvalidForm() => new(400, "The multipart form fields are missing or invalid.");

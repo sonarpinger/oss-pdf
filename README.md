@@ -22,13 +22,12 @@ All routes accept `POST`. A successful response is a PDF attachment. Multipart p
 | `/HtmlToPdf` | JSON with required `body` and optional `header`, `footer`, `fileName`, `marginTop`, `marginBottom`, `marginRight`, and `marginLeft`. |
 | `/WordToPdf` | Multipart `file` containing a DOCX, with `application/vnd.openxmlformats-officedocument.wordprocessingml.document` or `application/zip`. |
 | `/Compress` | Multipart `file` with `application/pdf` and integer `quality` from 1 to 100. qpdf optimizes PDF streams and eligible embedded images while retaining text, vector artwork, and image pixel dimensions. |
-| `/ImageCompress` | Multipart `file` with `application/pdf` and integer `quality` from 1 to 100. Pages become images at 150 DPI. |
 | `/Merge` | Two or more multipart `files` parts with `application/pdf`, in output order. |
-| `/ImageToPdf` | Multipart `file` with `image/jpeg` or `image/png`. The image is oriented automatically, composited on white, and placed on one Ironpress PDF page at 150 DPI. |
+| `/ImageToPdf` | Multipart `file` with `image/jpeg` or `image/png`. The image is oriented automatically and composited on white. The default embeds the original pixels using Ironpress. Optional `profile=small` embeds a downsampled JPEG in a PDF of the same physical page size. |
 
 HTML prints on Letter paper. Margins are in millimeters and default to 12 mm, or 20 mm on a side with a header or footer. Use inline styles and embed any assets in the supplied HTML. JavaScript and external resource loading are disabled. In either renderer, use elements with class `pageNumber` and `totalPages` inside the HTML header or footer to insert page numbers. For example, `Page <span class="pageNumber"></span> of <span class="totalPages"></span>`.
 
-Higher compression quality favors fidelity. For scans, `/Compress` preserves the pixel dimensions of embedded images. Use `/ImageCompress` to render the full page at 150 DPI. Some inputs can produce a larger output.
+Higher compression quality favors fidelity. For scans, `/Compress` preserves the pixel dimensions of embedded images. Some inputs can produce a larger output. To downsample a JPEG or PNG while creating a PDF, use `profile=small` on `/ImageToPdf`.
 
 ```sh
 curl --fail-with-body -o compressed.pdf \
@@ -40,7 +39,7 @@ Errors use HTTP status codes and problem details where a response can be sent. U
 
 ## Limits and validation
 
-The default limits include 200 pages per PDF or merged output, up to 32 files per merge, 25 million pixels per decoded image, 200 million pixels per raster job, 512 MiB of monitored scratch space per job, and 128 MiB per output. Set `Pdf__HtmlConcurrency`, `Pdf__WordConcurrency`, `Pdf__PdfConcurrency`, and `Pdf__RasterConcurrency` to tune parallelism. Defaults are 2 HTML, 2 Word, 2 compression/merge, and 1 raster/image job at a time. Ironpress uses reusable worker processes and terminates the active worker when a conversion is canceled or times out. The service logs queue and conversion timings.
+The default limits include 200 pages per PDF or merged output, up to 32 files per merge, 25 million pixels per decoded image, 512 MiB of monitored scratch space per job, and 128 MiB per output. Set `Pdf__HtmlConcurrency`, `Pdf__WordConcurrency`, `Pdf__PdfConcurrency`, and `Pdf__RasterConcurrency` to tune parallelism. Defaults are 2 HTML, 2 Word, 2 compression/merge, and 1 image-to-PDF job at a time. Ironpress uses reusable worker processes and terminates the active worker when a conversion is canceled or times out. The service logs queue and conversion timings.
 
 Run the container smoke suite from a host with Python 3, pypdf, curl, and ImageMagick.
 
@@ -119,9 +118,37 @@ On the local ARM64 Podman host, the highest passing load steps below each return
 
 At a matched 10 requests/s for the PNG, p95 was 128 ms with ImageMagick and 82 ms with Ironpress. The sample JPEG PDF grew from 390 KB to 1.26 MB because the Ironpress path stores the normalized pixels as PNG.
 
+### Small image PDF profile
+
+```sh
+curl --fail-with-body -o small.pdf \
+  -F 'file=@photo.png;type=image/png' -F 'profile=small' \
+  http://127.0.0.1:8080/ImageToPdf
+```
+
+The profile defaults to a finished PDF target of 100,000 bytes. Add the multipart field `targetBytes` with a positive integer to choose another target, such as `-F 'targetBytes=250000'` for 250 KB. This field requires `profile=small`.
+
+The profile preserves the default page size calculated from the oriented image at 150 DPI while reducing the number of embedded pixels. It starts with a longest side of up to 1,600 pixels and JPEG quality 76, then tries smaller dimensions with a floor of 640 pixels on the longest side, or the original size for smaller inputs. The final fallback uses JPEG quality 50. The target is best effort because the PDF can exceed it at those floors.
+
+The benchmark compares one `profile=small` request with a default `/ImageToPdf` request followed by `/Compress`. Each job measures the full sequence from upload to final PDF.
+
+```sh
+docker build -t oss-pdf:small-image-profile .
+python3 tests/html_benchmark/run_image.py --compare-small \
+  --baseline oss-pdf:small-image-profile --candidate oss-pdf:small-image-profile \
+  --round-trip-quality 10 --rates 0.25 --steady-seconds 80 \
+  --output untracked/image-to-pdf-comparison
+```
+
+In an 80-second run on the local ARM64 Podman host, both paths returned 20 valid PDFs at 0.25 jobs/s using two CPUs, 8 GiB RAM, no swap, and one image conversion slot.
+
+| Fixture | Default then `/Compress` at quality 10 | `profile=small` |
+| --- | --- | --- |
+| 22.05 MB transparent PNG | 615.5 KB PDF · 1,367 ms p95 | 93.7 KB PDF · 561 ms p95 |
+
 ### Scan compression comparison
 
-To compare both compression endpoints against a baseline, install Pillow alongside pypdf and run the benchmark with both containers listening on separate ports. It generates three synthetic 300 DPI scans and measures output bytes and embedded image dimensions at three quality levels.
+To compare `/Compress` against a baseline, install Pillow alongside pypdf and run the benchmark with both containers listening on separate ports. It generates three synthetic 300 DPI scans and measures output bytes and embedded image dimensions at three quality levels.
 
 ```sh
 python3 tests/compare_scan_compression.py http://127.0.0.1:18081 http://127.0.0.1:18080
@@ -129,8 +156,8 @@ python3 tests/compare_scan_compression.py http://127.0.0.1:18081 http://127.0.0.
 
 ## Licensing
 
-The API source is available under the [MIT License](LICENSE). qpdf is [Apache 2.0 licensed](https://qpdf.readthedocs.io/en/stable/license.html), PDFium is [BSD 3-Clause licensed](https://pdfium.googlesource.com/pdfium/+/main/LICENSE), and ImageMagick uses the [ImageMagick License](https://imagemagick.org/license/). The image includes their notices and Ubuntu package notices under `/usr/local/share/doc` and `/usr/share/doc`. The Docker build repackages Ubuntu's LibreOffice core to omit its optional Poppler-based PDF importer. Writer still exports DOCX to PDF. Use the exact versions installed in a distributed image when making corresponding third-party source available, and provide recipients and service users access to the corresponding application source as required by the applicable licenses.
+The API source is available under the [MIT License](LICENSE). qpdf is [Apache 2.0 licensed](https://qpdf.readthedocs.io/en/stable/license.html) and ImageMagick uses the [ImageMagick License](https://imagemagick.org/license/). The image includes their notices and Ubuntu package notices under `/usr/local/share/doc` and `/usr/share/doc`. The Docker build repackages Ubuntu's LibreOffice core to omit its optional Poppler-based PDF importer. Writer still exports DOCX to PDF. Use the exact versions installed in a distributed image when making corresponding third-party source available, and provide recipients and service users access to the corresponding application source as required by the applicable licenses.
 
-Ironpress and Html Agility Pack use the MIT License. Their notices are included under `/usr/local/share/doc/oss-pdf`. [Ironpress license](https://github.com/gastongouron/ironpress/blob/v1.7.0/LICENSE) · [Html Agility Pack license](https://github.com/zzzprojects/html-agility-pack/blob/v1.13.1/LICENSE)
+Ironpress and Html Agility Pack use the MIT License. Their notices are included under `/usr/local/share/doc/oss-pdf`. SkiaSharp's license and third-party notices are under `/usr/local/share/doc/skiasharp`. [Ironpress license](https://github.com/gastongouron/ironpress/blob/v1.7.0/LICENSE) · [Html Agility Pack license](https://github.com/zzzprojects/html-agility-pack/blob/v1.13.1/LICENSE)
 
 The independently implemented upload and conversion flow was informed by [pdf2img](https://github.com/joanfabregat/pdf2img), an MIT-licensed reference.

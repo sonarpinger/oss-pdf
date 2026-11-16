@@ -3,6 +3,7 @@ namespace OssPdf;
 public sealed class PdfLimits
 {
     public const long RequestBytes = 60_000_000;
+    public const long DefaultSmallImagePdfTargetBytes = 100_000;
     public string ScratchRoot { get; init; } = Path.GetTempPath();
     public int QueueWaitMilliseconds { get; init; } = 500;
     public int TimeoutSeconds { get; init; } = 120;
@@ -14,7 +15,6 @@ public sealed class PdfLimits
     public int MaxPages { get; init; } = 200;
     public int MaxMergeFiles { get; init; } = 32;
     public long MaxImagePixels { get; init; } = 25_000_000;
-    public long MaxRasterPixels { get; init; } = 200_000_000;
     public long MaxScratchBytes { get; init; } = 512 * 1024 * 1024;
     public long MaxOutputBytes { get; init; } = 128 * 1024 * 1024;
     public bool ChromiumSandbox { get; init; } = true;
@@ -23,7 +23,7 @@ public sealed class PdfLimits
         !string.IsNullOrWhiteSpace(ScratchRoot) && QueueWaitMilliseconds >= 0 && TimeoutSeconds > 0 &&
         HtmlConcurrency > 0 && Enum.IsDefined(HtmlRenderer) &&
         WordConcurrency > 0 && PdfConcurrency > 0 && RasterConcurrency > 0 &&
-        MaxPages > 0 && MaxMergeFiles >= 2 && MaxImagePixels > 0 && MaxRasterPixels >= MaxImagePixels &&
+        MaxPages > 0 && MaxMergeFiles >= 2 && MaxImagePixels > 0 &&
         MaxOutputBytes > 0 && MaxScratchBytes > MaxOutputBytes;
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare compression endpoints on deterministic, synthetic 300 DPI scans."""
+"""Compare /Compress across two builds on deterministic, synthetic 300 DPI scans."""
 
 import argparse
 import random
@@ -41,11 +41,11 @@ def write_scans(directory):
         yield name, path
 
 
-def compress(url, route, quality, source, output):
+def compress(url, quality, source, output):
     subprocess.run(
         ["curl", "--fail-with-body", "--silent", "--show-error", "--max-time", "150",
          "-o", output, "-F", f"file=@{source};type=application/pdf", "-F", f"quality={quality}",
-         f"{url.rstrip('/')}/{route}"],
+         f"{url.rstrip('/')}/Compress"],
         check=True,
     )
     pages = PdfReader(output).pages
@@ -66,11 +66,10 @@ def main():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         for name, scan in write_scans(root):
-            for route in ("Compress", "ImageCompress"):
-                for quality in (25, 55, 85):
-                    old_size, old_dims = compress(args.baseline_url, route, quality, scan, root / "baseline.pdf")
-                    new_size, new_dims = compress(args.candidate_url, route, quality, scan, root / "candidate.pdf")
-                    print(f"{name},{route},{quality},{scan.stat().st_size},{old_size},{new_size},{old_dims},{new_dims}")
+            for quality in (25, 55, 85):
+                old_size, old_dims = compress(args.baseline_url, quality, scan, root / "baseline.pdf")
+                new_size, new_dims = compress(args.candidate_url, quality, scan, root / "candidate.pdf")
+                print(f"{name},Compress,{quality},{scan.stat().st_size},{old_size},{new_size},{old_dims},{new_dims}")
 
 
 if __name__ == "__main__":

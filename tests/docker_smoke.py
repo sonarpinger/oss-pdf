@@ -157,10 +157,7 @@ def main():
         assert "VECTOR ONE" in text(compressed) and "VECTOR TWO" in text(compressed)
         # The source contains a path and text, with no images to carry a flattened page.
         assert image_count(compressed) == 0
-        raster = request("ImageCompress", "raster.pdf", *compress_args)
-        assert not text(raster).strip()
-        assert image_count(raster) == 2
-        assert pages(raster) == [(560.0, 380.0), (240.0, 360.0)], pages(raster)
+        request("ImageCompress", "retired-route.json", *compress_args, expected=404)
         merged = request("Merge", "merged.pdf",
                          "-F", f"files=@{word};type=application/pdf", "-F", f"files=@{pdf};type=application/pdf")
         assert len(pages(merged)) == 3
@@ -170,6 +167,31 @@ def main():
         jpeg_pdf = request("ImageToPdf", "jpeg.pdf", "-F", f"file=@{jpeg};type=image/jpeg")
         assert pages(png_pdf) == [(144.0, 57.6)], pages(png_pdf)
         assert pages(jpeg_pdf) == [(57.6, 144.0)], pages(jpeg_pdf)
+        for source, mime, original in ((png, "image/png", png_pdf), (jpeg, "image/jpeg", jpeg_pdf)):
+            small = request("ImageToPdf", f"small-{source.stem}{source.suffix}.pdf",
+                            "-F", "profile=small", "-F", f"file=@{source};type={mime}")
+            assert pages(small) == pages(original)
+            assert small.stat().st_size <= 100_000
+            assert image_count(small) == 1
+        request("ImageToPdf", "invalid-profile.json", "-F", f"file=@{png};type=image/png",
+                "-F", "profile=other", expected=400)
+        request("ImageToPdf", "duplicate-profile.json", "-F", f"file=@{png};type=image/png",
+                "-F", "profile=small", "-F", "profile=small", expected=400)
+        larger = request("ImageToPdf", "larger-target.pdf", "-F", "targetBytes=250000",
+                         "-F", f"file=@{jpeg};type=image/jpeg", "-F", "profile=small")
+        assert pages(larger) == pages(jpeg_pdf)
+        assert larger.stat().st_size <= 250_000
+        best_effort = request("ImageToPdf", "tiny-target.pdf", "-F", f"file=@{png};type=image/png",
+                              "-F", "profile=small", "-F", "targetBytes=1")
+        assert pages(best_effort) == pages(png_pdf)
+        assert best_effort.stat().st_size > 1
+        request("ImageToPdf", "target-without-profile.json", "-F", f"file=@{png};type=image/png",
+                "-F", "targetBytes=250000", expected=400)
+        for invalid in ("", "0", "-1", "2.5", "9223372036854775808"):
+            request("ImageToPdf", "invalid-target.json", "-F", f"file=@{png};type=image/png",
+                    "-F", "profile=small", "-F", f"targetBytes={invalid}", expected=400)
+        request("ImageToPdf", "duplicate-target.json", "-F", f"file=@{png};type=image/png",
+                "-F", "profile=small", "-F", "targetBytes=100000", "-F", "targetBytes=250000", expected=400)
 
         request("Compress", "wrong-type.json", "-F", f"file=@{pdf};type=text/plain", "-F", "quality=55", expected=415)
         request("ImageToPdf", "wrong-magic.json", "-F", f"file=@{png};type=image/jpeg", expected=415)
@@ -178,14 +200,8 @@ def main():
         writer = PdfWriter(clone_from=pdf)
         writer.encrypt("", "test owner", algorithm="RC4-128")
         writer.write(encrypted)
-        for route in ("Compress", "ImageCompress"):
-            request(route, f"{route}-encrypted.json", "-F", f"file=@{encrypted};type=application/pdf",
-                    "-F", "quality=55", expected=422)
-        wide = root / "large-page.pdf"
-        writer = PdfWriter()
-        writer.add_blank_page(width=6000, height=6000)
-        writer.write(wide)
-        request("ImageCompress", "pixels.json", "-F", f"file=@{wide};type=application/pdf", "-F", "quality=55", expected=422)
+        request("Compress", "encrypted.json", "-F", f"file=@{encrypted};type=application/pdf",
+                "-F", "quality=55", expected=422)
         request("Merge", "too-few.json", "-F", f"files=@{pdf};type=application/pdf", expected=400)
         generic_zip = root / "generic.zip"
         with zipfile.ZipFile(generic_zip, "w") as archive:
@@ -198,24 +214,25 @@ def main():
         request("Compress", "large.json", "-F", f"file=@{oversized};type=application/pdf", "-F", "quality=55", expected=413)
         request("Compress", "chunked.json", "-H", "Transfer-Encoding: chunked",
                 "-F", f"file=@{oversized};type=application/pdf", "-F", "quality=55", expected=413)
-        print("All six routes passed PDF output, validation, and request-size checks.")
+        print("All five routes passed PDF output, validation, and request-size checks. /ImageCompress returned 404.")
 
         if args.load:
             mix = [
                 ("HtmlToPdf", html_args), ("WordToPdf", word_args),
-                ("ImageCompress", compress_args),
+                ("Compress", compress_args),
                 ("Merge", ("-F", f"files=@{word};type=application/pdf", "-F", f"files=@{pdf};type=application/pdf")),
+                ("ImageToPdf", ("-F", f"file=@{png};type=image/png", "-F", "profile=small")),
             ]
 
             def workload(index):
-                route, arguments = mix[index % len(mix)]
+                route, arguments = mix[index]
                 start = time.monotonic()
                 request(route, f"mixed-load-{index}.pdf", *arguments)
                 return time.monotonic() - start
 
             start = time.monotonic()
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-                latencies = sorted(pool.map(workload, range(4)))
+                latencies = sorted(pool.map(workload, range(len(mix))))
             elapsed = time.monotonic() - start
             p95 = latencies[math.ceil(len(latencies) * 0.95) - 1]
             print(f"Mixed concurrency smoke test passed at {len(latencies) / elapsed:.2f} requests/sec, p95 {p95:.2f}s.")

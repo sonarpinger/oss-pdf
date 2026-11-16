@@ -5,6 +5,18 @@ namespace OssPdf;
 
 internal static class NativeTool
 {
+    public static ProcessStartInfo ApplicationStartInfo()
+    {
+        var executable = Environment.ProcessPath ?? throw new InvalidOperationException("Application path is unavailable.");
+        var start = new ProcessStartInfo(executable);
+        if (string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            start.ArgumentList.Add(typeof(NativeTool).Assembly.Location);
+        }
+
+        return start;
+    }
+
     public static async Task<string> RunAsync(
         PdfJob job, string executable, IEnumerable<string> arguments, CancellationToken cancellationToken)
     {

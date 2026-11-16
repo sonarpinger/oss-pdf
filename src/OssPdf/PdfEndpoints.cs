@@ -58,16 +58,6 @@ public static class PdfEndpoints
             return "compressed.pdf";
         });
 
-    [WolverinePost("/ImageCompress")]
-    public static Task<IResult> ImageCompress(
-        MultipartReader reader, HttpContext context, PdfJobs jobs, PdfConverters converters) =>
-        jobs.RunAsync(context, PdfEngine.Raster, async (job, cancellationToken) =>
-        {
-            var upload = await Uploads.ReadAsync(reader, job, UploadKind.Pdf, true, 1, cancellationToken);
-            await converters.RasterizeAsync(job, upload.Paths[0], upload.Quality!.Value, cancellationToken);
-            return "image-compressed.pdf";
-        });
-
     [WolverinePost("/Merge")]
     public static Task<IResult> Merge(
         MultipartReader reader, HttpContext context, PdfJobs jobs, PdfConverters converters, IOptions<PdfLimits> options) =>
@@ -84,7 +74,7 @@ public static class PdfEndpoints
         jobs.RunAsync(context, PdfEngine.Raster, async (job, cancellationToken) =>
         {
             var upload = await Uploads.ReadAsync(reader, job, UploadKind.Image, false, 1, cancellationToken);
-            await converters.ImageToPdfAsync(job, upload.Paths[0], cancellationToken);
+            await converters.ImageToPdfAsync(job, upload.Paths[0], upload.ImagePdfTargetBytes, cancellationToken);
             return "image.pdf";
         });
 

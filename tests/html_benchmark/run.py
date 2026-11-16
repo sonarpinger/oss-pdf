@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timezone
+from fractions import Fraction
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -127,19 +128,24 @@ def percentile95(values):
     return ordered[math.ceil(len(ordered) * 0.95) - 1] if ordered else None
 
 
-def run_stage(args, fixture, url, directory, container, cgroup, name, rate, duration, upload_mime=None):
+def run_stage(args, fixture, url, directory, container, cgroup, name, rate, duration,
+              upload_mime=None, image_flow=None):
     summary_path = directory / f"{name}.json"
     started = datetime.now(timezone.utc).isoformat()
     before_cpu = read_counters(cgroup / "cpu.stat")
     before_memory = read_counters(cgroup / "memory.events")
     start_usage, browsers, workers = sample_resources(cgroup)
     samples = [start_usage]
+    arrival_rate = Fraction(str(rate))
     upload_options = ["-e", f"UPLOAD_MIME={upload_mime}"] if upload_mime else []
+    if image_flow:
+        upload_options += ["-e", f"IMAGE_PDF_FLOW={image_flow}", "-e", f"ROUND_TRIP_QUALITY={args.round_trip_quality}"]
     with (directory / f"{name}.log").open("w") as log:
         start_time = time.monotonic()
         with subprocess.Popen(
             [args.k6, "run", "--quiet", "--no-color",
-             "-e", f"BASE_URL={url}", "-e", f"FIXTURE={fixture}", "-e", f"RATE={rate}",
+             "-e", f"BASE_URL={url}", "-e", f"FIXTURE={fixture}", "-e", f"RATE={arrival_rate.numerator}",
+             "-e", f"RATE_PERIOD_SECONDS={arrival_rate.denominator}",
              "-e", f"SECONDS={duration}", "-e", f"SUMMARY_PATH={summary_path}", *upload_options, str(SCRIPT)],
             stdout=log, stderr=subprocess.STDOUT,
         ) as process:
@@ -165,7 +171,7 @@ def run_stage(args, fixture, url, directory, container, cgroup, name, rate, dura
     counts = {key: int(metrics.get(key, {}).get("values", {}).get("count", 0)) for key in COUNTERS}
     latency = metrics.get("valid_pdf_latency", {}).get("values", {})
     valid_pdfs = counts["valid_pdfs"]
-    expected = rate * duration
+    expected = math.ceil(arrival_rate * duration)
     if counts["completed_requests"] > expected:
         raise RuntimeError(f"Unexpected k6 request count for {name}: {counts}")
     successful = valid_pdfs >= 0.99 * expected and counts["dropped_iterations"] == 0
@@ -174,7 +180,7 @@ def run_stage(args, fixture, url, directory, container, cgroup, name, rate, dura
     oom_kills = after_memory.get("oom_kill", 0) - before_memory.get("oom_kill", 0)
     if args.renderer == "playwright":
         renderer_stable = len(browsers) == 1 and not workers
-    elif args.renderer == "imagemagick":
+    elif args.renderer in ("imagemagick", "small"):
         renderer_stable = not browsers and not workers
     else:
         renderer_stable = 1 <= len(workers) <= (1 if upload_mime else 2) and not browsers
@@ -191,6 +197,7 @@ def run_stage(args, fixture, url, directory, container, cgroup, name, rate, dura
         "valid_pdf_per_sec": round(valid_pdfs / duration, 4),
         "valid_percent": round(valid_pdfs * 100 / expected, 4),
         "p50_ms": latency.get("med"), "p95_ms": latency.get("p(95)"), "p99_ms": latency.get("p(99)"),
+        "pdf_bytes_p95": metrics.get("valid_pdf_bytes", {}).get("values", {}).get("p(95)"),
         "p95_ms_by_quarter": [
             metrics.get(f"valid_pdf_latency_q{quarter}", {}).get("values", {}).get("p(95)")
             for quarter in range(1, 5)
