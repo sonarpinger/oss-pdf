@@ -14,7 +14,7 @@
 ## Architecture:
 
 - Modern .NET 10 C#
-- Wolverine Endpoints
+- ASP.NET Core Minimal APIs
 - Have a Dockerfile built
 
 ## Endpoints:

@@ -1,6 +1,6 @@
 # oss-pdf
 
-A self-hosted .NET 10 PDF API with Wolverine HTTP endpoints. See [Design.md](Design.md) for the original requirements.
+A self-hosted PDF API built with ASP.NET Core Minimal APIs on .NET 10. See [Design.md](Design.md) for the original requirements.
 
 ## Run
 

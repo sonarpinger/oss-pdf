@@ -1,6 +1,4 @@
 using OssPdf;
-using Wolverine;
-using Wolverine.Http;
 
 if (args is ["--install-chromium"])
 {
@@ -24,8 +22,6 @@ builder.Services.AddSingleton<PdfJobs>();
 builder.Services.AddSingleton<PdfConverters>();
 builder.Services.AddSingleton<IronpressWorker>();
 builder.Services.AddSingleton<HtmlRenderer>();
-builder.Host.UseWolverine(options => options.Durability.Mode = DurabilityMode.Solo);
-builder.Services.AddWolverineHttp();
 
 var app = builder.Build();
 app.UseExceptionHandler();
@@ -50,6 +46,10 @@ app.Use(async (context, next) =>
         await Results.Problem(statusCode: exception.StatusCode, title: exception.Message).ExecuteAsync(context);
     }
 });
-app.MapWolverineEndpoints();
+app.MapPost("/HtmlToPdf", PdfEndpoints.HtmlToPdf);
+app.MapPost("/WordToPdf", PdfEndpoints.WordToPdf);
+app.MapPost("/Compress", PdfEndpoints.Compress);
+app.MapPost("/Merge", PdfEndpoints.Merge);
+app.MapPost("/ImageToPdf", PdfEndpoints.ImageToPdf);
 await app.RunAsync();
 return 0;

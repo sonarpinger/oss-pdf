@@ -13,8 +13,26 @@ internal sealed record UploadBatch(IReadOnlyList<string> Paths, int? Quality, lo
 
 internal static class Uploads
 {
+    private const int MaxMultipartBoundaryLength = 128;
     private const string DocxType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     private const string WordMainType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
+
+    public static MultipartReader OpenMultipart(HttpRequest request)
+    {
+        if (!MediaTypeHeaderValue.TryParse(request.ContentType, out var contentType) ||
+            !contentType.MediaType.Equals("multipart/form-data", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new PdfRequestException(415, "A multipart/form-data request is required.");
+        }
+
+        var boundary = HeaderUtilities.RemoveQuotes(contentType.Boundary).Value;
+        if (string.IsNullOrWhiteSpace(boundary) || boundary.Length > MaxMultipartBoundaryLength)
+        {
+            throw new PdfRequestException(400, "Invalid multipart boundary.");
+        }
+
+        return new MultipartReader(boundary, request.Body);
+    }
 
     public static async Task<UploadBatch> ReadAsync(
         MultipartReader reader,

@@ -221,6 +221,22 @@ def main():
                 "--form-string", "fileName=second", expected=400)
 
         request("Compress", "wrong-type.json", "-F", f"file=@{pdf};type=text/plain", "-F", "quality=55", expected=415)
+        request("Compress", "non-multipart.json", "-H", "Content-Type: application/json",
+                "--data-binary", "{}", expected=415)
+        for header in ("multipart/form-data", 'multipart/form-data; boundary=""',
+                       "multipart/form-data; boundary=" + "x" * 129):
+            request("Compress", "invalid-boundary.json", "-H", f"Content-Type: {header}",
+                    "--data-binary", "", expected=400)
+        boundary = "x" * 128
+        multipart = root / "multipart.bin"
+        multipart.write_bytes(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="sample.pdf"\r\n'
+            'Content-Type: application/pdf\r\n\r\n'.encode()
+            + pdf.read_bytes()
+            + f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="quality"\r\n\r\n55\r\n--{boundary}--\r\n'.encode()
+        )
+        request("Compress", "quoted-boundary.pdf", "-H", f'Content-Type: multipart/form-data; boundary="{boundary}"',
+                "--data-binary", f"@{multipart}", download_name="compressed.pdf")
         request("ImageToPdf", "wrong-magic.json", "-F", f"file=@{png};type=image/jpeg", expected=415)
         request("Compress", "quality.json", "-F", f"file=@{pdf};type=application/pdf", "-F", "quality=101", expected=400)
         encrypted = root / "encrypted.pdf"
