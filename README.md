@@ -33,13 +33,62 @@ HTML prints on Letter paper. Margins are in millimeters and default to 12 mm, or
 
 Higher compression quality favors fidelity. For scans, `/Compress` preserves the pixel dimensions of embedded images. Some inputs can produce a larger output. To downsample a JPEG or PNG while creating a PDF, use `profile=small` on `/ImageToPdf`.
 
+Errors use HTTP status codes and problem details where a response can be sent. Use `400` for invalid fields, `413` for oversized bodies, `415` for unsupported media types or mismatched signatures, and `422` for unsupported document contents or conversion limits. Busy converters respond with `503` and `Retry-After`. Conversion timeouts return `504`.
+
+### curl examples
+
+Run these commands from a directory containing the sample input files. The `-OJ` option saves each PDF in the current directory using the filename from the response header.
+
+#### /HtmlToPdf
+
 ```sh
-curl --fail-with-body -o compressed.pdf \
-  -F 'file=@input.pdf;type=application/pdf' -F 'quality=65' \
+curl --fail-with-body -OJ \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"body":"<h1>Invoice</h1>","fileName":"invoice"}' \
+  http://127.0.0.1:8080/HtmlToPdf
+```
+
+#### /WordToPdf
+
+```sh
+curl --fail-with-body -OJ \
+  -F 'file=@report.docx;type=application/vnd.openxmlformats-officedocument.wordprocessingml.document' \
+  --form-string 'fileName=word-report' \
+  http://127.0.0.1:8080/WordToPdf
+```
+
+#### /Compress
+
+```sh
+curl --fail-with-body -OJ \
+  -F 'file=@input.pdf;type=application/pdf' \
+  -F 'quality=65' \
+  --form-string 'fileName=reduced.pdf' \
   http://127.0.0.1:8080/Compress
 ```
 
-Errors use HTTP status codes and problem details where a response can be sent. Use `400` for invalid fields, `413` for oversized bodies, `415` for unsupported media types or mismatched signatures, and `422` for unsupported document contents or conversion limits. Busy converters respond with `503` and `Retry-After`. Conversion timeouts return `504`.
+#### /Merge
+
+```sh
+curl --fail-with-body -OJ \
+  -F 'files=@first.pdf;type=application/pdf' \
+  -F 'files=@second.pdf;type=application/pdf' \
+  --form-string 'fileName=combined' \
+  http://127.0.0.1:8080/Merge
+```
+
+#### /ImageToPdf
+
+Use `profile=small` with `targetBytes=250000` for a best-effort 250 KB target.
+
+```sh
+curl --fail-with-body -OJ \
+  -F 'file=@photo.png;type=image/png' \
+  -F 'profile=small' \
+  -F 'targetBytes=250000' \
+  --form-string 'fileName=photo-small' \
+  http://127.0.0.1:8080/ImageToPdf
+```
 
 ## Limits and validation
 
@@ -124,13 +173,7 @@ At a matched 10 requests/s for the PNG, p95 was 128 ms with ImageMagick and 82 m
 
 ### Small image PDF profile
 
-```sh
-curl --fail-with-body -o small.pdf \
-  -F 'file=@photo.png;type=image/png' -F 'profile=small' \
-  http://127.0.0.1:8080/ImageToPdf
-```
-
-The profile defaults to a finished PDF target of 100,000 bytes. Add the multipart field `targetBytes` with a positive integer to choose another target, such as `-F 'targetBytes=250000'` for 250 KB. This field requires `profile=small`.
+The profile defaults to a finished PDF target of 100,000 bytes. Add the multipart field `targetBytes` with a positive integer to choose another target. This field requires `profile=small`. [250 KB curl example](#imagetopdf)
 
 The profile preserves the default page size calculated from the oriented image at 150 DPI while reducing the number of embedded pixels. It starts with a longest side of up to 1,600 pixels and JPEG quality 76, then tries smaller dimensions with a floor of 640 pixels on the longest side, or the original size for smaller inputs. The final fallback uses JPEG quality 50. The target is best effort because the PDF can exceed it at those floors.
 
